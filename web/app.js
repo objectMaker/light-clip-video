@@ -20,6 +20,12 @@ const S = {
   browseCwd: '',
   browseParent: '',
   selected: [],
+  openVideos: [],
+  openSubs: [],
+  openStep: 1,
+  browseSubCwd: '',
+  browseSubParent: '',
+  playingCue: -1,
   config: null,
   srcInfo: null,
   profiles: [],
@@ -1361,7 +1367,9 @@ function bindTimelineDrag() {
       d.end = next.end;
       d.moved = true;
       d.el.style.left = msToPct(d.start) + '%';
-      d.el.style.width = Math.max(0.3, (d.end - d.start) / d.duration * 100) + '%';
+      // Use the CURRENT zoom span, not the full source duration: otherwise the
+      // clip snaps back to its 1× width while dragging in a zoomed view.
+      d.el.style.width = Math.max(0.3, (d.end - d.start) / viewSpanMs() * 100) + '%';
       updateDragTip(x);
       return;
     }
@@ -1834,82 +1842,124 @@ async function addClipsFromChecked() {
   setStatus(`已由勾选字幕生成 ${res.clips.length} 个片段`);
 }
 
-/* ---------- file browser ---------- */
+/* ---------- file browser (two-step: video → subtitle) ---------- */
 
-async function browseDir(dir) {
-  const res = await api('/api/browse?' + q({ dir, kind: 'all' }));
-  S.browseCwd = res.path;
-  S.browseParent = res.parent || '';
-  $('browsePath').value = res.path;
-  const list = $('browseList');
+function samePath(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
+
+function addOpenVideo(path) {
+  if (S.openVideos.some((p) => samePath(p, path))) return;
+  S.openVideos.push(path);
+  renderOpenSelected();
+}
+function addOpenSub(path) {
+  if (S.openSubs.some((s) => samePath(s.path, path))) return;
+  S.openSubs.push({ path, source_id: null });
+  renderOpenSelected();
+}
+
+async function browseInto(dir, kind) {
+  const listId = kind === 'video' ? 'browseList' : 'subBrowseList';
+  const pathId = kind === 'video' ? 'browsePath' : 'subBrowsePath';
+  const res = await api('/api/browse?' + q({ dir, kind }));
+  if (kind === 'video') { S.browseCwd = res.path; S.browseParent = res.parent || ''; }
+  else { S.browseSubCwd = res.path; S.browseSubParent = res.parent || ''; }
+  $(pathId).value = res.path;
+  const list = $(listId);
   const rows = [];
   if (res.parent) rows.push(`<div class="browse-item" data-dir="${esc(res.parent)}"><span class="ico">↑</span><span class="name">.. 上级目录</span></div>`);
   res.entries.forEach((e) => rows.push(
     `<div class="browse-item" data-${e.is_dir ? 'dir' : 'file'}="${esc(e.path)}">
       <span class="ico">${e.is_dir ? '▸' : '·'}</span><span class="name">${esc(e.name)}</span>
       <span class="sz">${e.is_dir ? '' : (e.size / 1048576).toFixed(1) + ' MB'}</span></div>`));
-  list.innerHTML = rows.join('') || '<div class="empty-state">此目录没有可选的媒体文件</div>';
-  list.querySelectorAll('[data-dir]').forEach((el) => el.onclick = () => browseDir(el.dataset.dir));
-  list.querySelectorAll('[data-file]').forEach((el) => el.onclick = () => addSelected(el.dataset.file));
-}
-
-function addSelected(path) {
-  if (S.selected.some((s) => s.path === path)) return;
-  S.selected.push({ path, source_id: null });
-  renderSelected();
-}
-function fileKind(path) { return /\.(srt|vtt|ass|ssa)$/i.test(path) ? '字幕' : '视频'; }
-
-function renderSelected() {
-  const box = $('selectedList');
-  const videos = S.selected.filter((s) => fileKind(s.path) === '视频');
-  box.innerHTML = S.selected.map((s, i) => {
-    const kind = fileKind(s.path);
-    const name = s.path.split(/[\\/]/).pop();
-    let sourceSel = '';
-    if (kind === '字幕' && videos.length) {
-      if (!videos.some((v) => v.path === s.source_id)) {
-        const stem = s.path.replace(/\.(srt|vtt|ass|ssa)$/i, '');
-        const match = videos.find((v) => v.path.replace(/\.[^.]+$/, '') === stem);
-        s.source_id = (match || videos[0]).path;
-      }
-      sourceSel = `<select class="select small" data-sel="${i}">${videos.map((v) =>
-        `<option value="${esc(v.path)}" ${s.source_id === v.path ? 'selected' : ''}>${esc(v.path.split(/[\\/]/).pop())}</option>`).join('')}</select>`;
-    }
-    return `<div class="sel-item"><span class="kind">${kind}</span><span class="name" title="${esc(s.path)}">${esc(name)}</span>
-      ${sourceSel}<button class="btn tiny" data-rm="${i}">移除</button></div>`;
-  }).join('') || '<div class="empty-state">尚未选择文件，单击目录进入，单击文件加入</div>';
-  box.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => { S.selected.splice(+b.dataset.rm, 1); renderSelected(); });
-  box.querySelectorAll('[data-sel]').forEach((sel) => sel.onchange = () => {
-    S.selected[+sel.dataset.sel].source_id = sel.value;
+  list.innerHTML = rows.join('') || '<div class="empty-state">此目录没有可选文件</div>';
+  list.querySelectorAll('[data-dir]').forEach((el) => el.onclick = () => browseInto(el.dataset.dir, kind));
+  list.querySelectorAll('[data-file]').forEach((el) => el.onclick = () => {
+    if (kind === 'video') addOpenVideo(el.dataset.file); else addOpenSub(el.dataset.file);
   });
 }
 
+function renderOpenSelected() {
+  const vbox = $('selectedVideoList');
+  if (vbox) {
+    vbox.innerHTML = S.openVideos.map((p, i) =>
+      `<div class="sel-item"><span class="kind">视频</span><span class="name" title="${esc(p)}">${esc(p.split(/[\\/]/).pop())}</span>
+        <button class="btn tiny" data-rv="${i}">移除</button></div>`).join('')
+      || '<div class="empty-state">还没有选视频，单击上方目录里的视频文件加入</div>';
+    vbox.querySelectorAll('[data-rv]').forEach((b) => b.onclick = () => {
+      S.openVideos.splice(+b.dataset.rv, 1); renderOpenSelected();
+    });
+  }
+  const sbox = $('selectedSubList');
+  if (sbox) {
+    const vids = S.openVideos;
+    sbox.innerHTML = S.openSubs.map((s, i) => {
+      let sel = '';
+      if (vids.length > 1) {
+        if (!s.source_id || !vids.some((v) => samePath(v, s.source_id))) s.source_id = vids[0];
+        sel = `<select class="select small" data-ssel="${i}">${vids.map((v) =>
+          `<option value="${esc(v)}" ${samePath(s.source_id, v) ? 'selected' : ''}>${esc(v.split(/[\\/]/).pop())}</option>`).join('')}</select>`;
+      }
+      return `<div class="sel-item"><span class="kind">字幕</span><span class="name" title="${esc(s.path)}">${esc(s.path.split(/[\\/]/).pop())}</span>${sel}
+        <button class="btn tiny" data-rs="${i}">移除</button></div>`;
+    }).join('') || '<div class="empty-state">没有手动选字幕（留空时会自动匹配同名 .srt / .vtt）</div>';
+    sbox.querySelectorAll('[data-rs]').forEach((b) => b.onclick = () => {
+      S.openSubs.splice(+b.dataset.rs, 1); renderOpenSelected();
+    });
+    sbox.querySelectorAll('[data-ssel]').forEach((sel) => sel.onchange = () => {
+      S.openSubs[+sel.dataset.ssel].source_id = sel.value;
+    });
+  }
+}
+
+function gotoOpenStep(n) {
+  S.openStep = n;
+  $('openStep1').classList.toggle('hidden', n !== 1);
+  $('openStep2').classList.toggle('hidden', n !== 2);
+  document.querySelectorAll('.open-step').forEach((el) => el.classList.toggle('active', +el.dataset.step === n));
+  $('openTitle').textContent = n === 1 ? '选择媒体 · 第 1 步：视频' : '选择媒体 · 第 2 步：字幕（可跳过）';
+  if (n === 2) {
+    // Default the subtitle browser to the folder of the first chosen video.
+    let dir = S.browseSubCwd || '';
+    if (S.openVideos.length) dir = S.openVideos[0].replace(/[\\/][^\\/]+$/, '');
+    browseInto(dir, 'sub').catch(() => {});
+    renderOpenSelected();
+  }
+}
+
+function openMediaDialog() {
+  S.openVideos = [];
+  S.openSubs = [];
+  $('fileDialog').classList.remove('hidden');
+  gotoOpenStep(1);
+  browseInto(S.browseCwd || S.config?.cwd || '', 'video').catch(() => {});
+  renderOpenSelected();
+}
+
 // Whole-file compression keeps the timeline unchanged, so loading the .srt
-// is optional. The checkbox lets the user skip the same-named .srt lookup.
+// is optional. The checkbox lets the user skip the same-named lookup.
 function autoSubtitlesEnabled() {
   const el = $('autoSubChk');
   return el ? !!el.checked : true;
 }
 
-async function loadSelected() {
-  const videos = S.selected.filter((s) => fileKind(s.path) === '视频').map((s) => s.path);
-  if (!videos.length) { alert('请至少选择一个视频'); return; }
-  const subtitles = S.selected.filter((s) => fileKind(s.path) === '字幕').map((s, i) => {
+async function loadSelected(autoOverride) {
+  const videos = S.openVideos.slice();
+  if (!videos.length) { alert('请先在第 1 步选择至少一个视频'); gotoOpenStep(1); return; }
+  const auto = autoOverride === undefined ? autoSubtitlesEnabled() : !!autoOverride;
+  const subtitles = S.openSubs.map((s, i) => {
     let source_id = s.source_id;
-    if (!source_id) {
-      const stem = videos.find((v) => v.replace(/\.[^.]+$/, '') === s.path.replace(/\.(srt|vtt|ass|ssa)$/i, ''));
-      source_id = stem || videos[0];
+    if (!source_id || !videos.some((v) => samePath(v, source_id))) {
+      const stem = s.path.replace(/\.(srt|vtt|ass|ssa)$/i, '').toLowerCase();
+      const match = videos.find((v) => v.replace(/\.[^.]+$/, '').toLowerCase() === stem);
+      source_id = match || videos[0];
     }
-    const idx = videos.indexOf(source_id) + 1;
+    const idx = videos.findIndex((v) => samePath(v, source_id)) + 1;
     return { path: s.path, source_id: `s${Math.max(1, idx)}`, group_id: `g${i + 1}`,
       label: s.path.split(/[\\/]/).pop(), lang: '' };
   });
   setStatus('正在载入媒体…');
   try {
-    const res = await post('/api/open', {
-      videos, subtitles, auto_subtitles: autoSubtitlesEnabled(),
-    });
+    const res = await post('/api/open', { videos, subtitles, auto_subtitles: auto });
     applyProject(res.project, res.state);
     $('fileDialog').classList.add('hidden');
     const trackCount = res.project.tracks?.length || 0;
@@ -2459,16 +2509,21 @@ function bindEvents() {
     };
     reader.readAsText(file);
   };
-  $('btnOpen').onclick = () => {
-    $('fileDialog').classList.remove('hidden');
-    browseDir(S.browseCwd || S.config?.cwd || '');
-    renderSelected();
-  };
+  $('btnOpen').onclick = openMediaDialog;
   $('browseCancel').onclick = () => $('fileDialog').classList.add('hidden');
-  $('browseGo').onclick = () => browseDir($('browsePath').value.trim());
-  $('browseUp').onclick = () => browseDir(S.browseParent);
-  $('browseLoad').onclick = loadSelected;
-  $('browsePath').onkeydown = (e) => { if (e.key === 'Enter') browseDir($('browsePath').value.trim()); };
+  $('btnOpenNext').onclick = () => {
+    if (!S.openVideos.length) { alert('请先在第 1 步选择至少一个视频'); return; }
+    gotoOpenStep(2);
+  };
+  $('btnOpenBack').onclick = () => gotoOpenStep(1);
+  $('btnOpenLoad').onclick = () => loadSelected();
+  $('btnOpenLoadVideoOnly').onclick = () => { S.openSubs = []; loadSelected(false); };
+  $('browseGo').onclick = () => browseInto($('browsePath').value.trim(), 'video');
+  $('browseUp').onclick = () => browseInto(S.browseParent, 'video');
+  $('browsePath').onkeydown = (e) => { if (e.key === 'Enter') browseInto($('browsePath').value.trim(), 'video'); };
+  $('subBrowseGo').onclick = () => browseInto($('subBrowsePath').value.trim(), 'sub');
+  $('subBrowseUp').onclick = () => browseInto(S.browseSubParent, 'sub');
+  $('subBrowsePath').onkeydown = (e) => { if (e.key === 'Enter') browseInto($('subBrowsePath').value.trim(), 'sub'); };
 
   $('btnPlay').onclick = togglePlay;
   $('btnBack').onclick = () => nudge(-5);
@@ -2841,7 +2896,12 @@ function wbTick(srcMs) {
       const inProof = !$('cueProofArea').classList.contains('hidden');
       const typing = document.activeElement === $('wbStart') || document.activeElement === $('wbEnd');
       if (inProof && !typing) renderCueWorkbench();
-      if (hit >= 0 && inProof) scrollCueIntoView(hit);
+      // Follow playback in the subtitle list whatever sub-tab is open: without
+      // this the highlighted row is often scrolled out of view, so it looks
+      // like the subtitles are not following the video at all.
+      if (hit >= 0 && !video.paused && !$('panel-cues').classList.contains('hidden')) {
+        scrollCueIntoView(hit);
+      }
     }
   }
   updateWbPlayhead();
@@ -2881,7 +2941,22 @@ function showCueSub(sub) {
   document.querySelectorAll('.subtab[data-sub]').forEach((b) => b.classList.toggle('active', b.dataset.sub === sub));
   $('cuePickArea').classList.toggle('hidden', sub !== 'pick');
   $('cueProofArea').classList.toggle('hidden', sub !== 'proof');
-  if (sub === 'proof') renderCueWorkbench();
+  if (sub === 'proof') {
+    // Nothing selected yet? Pick the line under the playhead (or the first
+    // line) so the controls appear immediately instead of an empty hint that
+    // looks like "there is nowhere to adjust the timing".
+    if (S.activeCue == null) {
+      const track = currentTrack();
+      if (track && track.cues.length) {
+        const t = video.currentTime * 1000;
+        let idx = track.cues.findIndex((c) => c.start_ms <= t && t < c.end_ms);
+        if (idx < 0) idx = 0;
+        S.activeCue = idx;
+        renderCues();
+      }
+    }
+    renderCueWorkbench();
+  }
 }
 
 async function exportSubtitlesOnly() {

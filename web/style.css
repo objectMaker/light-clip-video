@@ -21,6 +21,7 @@ html, body { height: 100%; margin: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
   font-size: 13px; color: var(--text); background: var(--bg-soft);
+  padding: 8px;
 }
 button, input, select { font-family: inherit; font-size: 13px; color: inherit; }
 .hidden { display: none !important; }
@@ -28,7 +29,7 @@ button, input, select { font-family: inherit; font-size: 13px; color: inherit; }
 .mono { font-family: "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
 .hint { color: var(--text-3); font-size: 12px; line-height: 1.6; margin: 6px 0 10px; }
 
-.app { height: 100vh; display: flex; flex-direction: column; min-width: 900px; }
+.app { height: 100%; display: flex; flex-direction: column; min-width: 900px; }
 .topbar {
   display: flex; align-items: center; gap: 9px; padding: 10px 16px;
   background: var(--bg); border-bottom: 1px solid var(--border); flex: none;
@@ -130,6 +131,14 @@ button, input, select { font-family: inherit; font-size: 13px; color: inherit; }
 .cue-row .txt { flex: 1; line-height: 1.5; word-break: break-word; }
 .cue-ops { display: none; gap: 3px; flex: none; }
 .cue-row:hover .cue-ops, .cue-row.active .cue-ops { display: flex; }
+
+/* two-step media picker */
+.open-steps { display: flex; gap: 8px; margin: 4px 0 12px; }
+.open-step { flex: 1; display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-3); font-size: 12px; }
+.open-step b { width: 18px; height: 18px; border-radius: 50%; background: var(--bg-sunken); color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex: none; }
+.open-step.active { border-color: var(--blue); color: var(--text); background: var(--blue-soft); }
+.open-step.active b { background: var(--blue); color: #fff; }
+.open-step .opt { color: var(--text-3); }
 .cue-ops button { border: 1px solid var(--border-strong); background: var(--bg); border-radius: 4px; font-size: 10px; padding: 1px 5px; cursor: pointer; color: var(--text-2); }
 .cue-ops button:hover { border-color: var(--blue); color: var(--blue); }
 .cue-ops button.on-start { background: #e4f6ef; border-color: var(--green); color: #126a4f; }

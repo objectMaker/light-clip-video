@@ -286,20 +286,43 @@
 
 <div id="fileDialog" class="modal hidden">
   <div class="modal-card wide">
-    <div class="modal-title">打开媒体文件</div>
-    <div class="browser-bar">
-      <input id="browsePath" class="input" placeholder="输入目录路径，或从下方盘符进入">
-      <button id="browseGo" class="btn tiny">转到</button>
-      <button id="browseUp" class="btn tiny">上级</button>
+    <div class="modal-title" id="openTitle">选择媒体 · 第 1 步：视频</div>
+    <div class="open-steps">
+      <div class="open-step active" data-step="1"><b>1</b> 选择视频</div>
+      <div class="open-step" data-step="2"><b>2</b> 选择字幕 <span class="opt">（可跳过）</span></div>
     </div>
-    <div id="browseList" class="browse-list"></div>
-    <div class="modal-subtitle">已选文件</div>
-    <div id="selectedList" class="selected-list"></div>
-    <label class="checkbox-row"><input type="checkbox" id="autoSubChk" checked> 自动匹配同名字幕（整片压缩时取消勾选，就不载入字幕）</label>
-    <div class="hint">可多选视频与字幕。字幕可在右侧下拉里指定归属哪个视频。<b>整片压缩不剪辑时不需要字幕</b>：时间轴没变，原来的 .srt 改名成输出视频同名即可继续用。</div>
-    <div class="modal-actions">
-      <button id="browseCancel" class="btn">取消</button>
-      <button id="browseLoad" class="btn primary">载入</button>
+
+    <div id="openStep1">
+      <div class="browser-bar">
+        <input id="browsePath" class="input" placeholder="输入目录路径，或从下方盘符进入">
+        <button id="browseGo" class="btn tiny">转到</button>
+        <button id="browseUp" class="btn tiny">上级</button>
+      </div>
+      <div id="browseList" class="browse-list"></div>
+      <div class="modal-subtitle">已选视频（可多选，按加入顺序拼接）</div>
+      <div id="selectedVideoList" class="selected-list"></div>
+      <div class="modal-actions">
+        <button id="browseCancel" class="btn">取消</button>
+        <button id="btnOpenNext" class="btn primary">下一步：选择字幕 →</button>
+      </div>
+    </div>
+
+    <div id="openStep2" class="hidden">
+      <div class="browser-bar">
+        <input id="subBrowsePath" class="input" placeholder="输入字幕所在目录">
+        <button id="subBrowseGo" class="btn tiny">转到</button>
+        <button id="subBrowseUp" class="btn tiny">上级</button>
+      </div>
+      <div id="subBrowseList" class="browse-list"></div>
+      <label class="checkbox-row"><input type="checkbox" id="autoSubChk" checked> 自动匹配同名同目录字幕（.srt / .vtt，含 <span class="mono">片名.语言.srt</span> 多语言）</label>
+      <div class="modal-subtitle">已选字幕（可多选；留空则只载入视频）</div>
+      <div id="selectedSubList" class="selected-list"></div>
+      <div class="hint">字幕在这里单独挑；不挑的话，勾选「自动匹配」会按视频同名去找。<b>整片压缩不剪辑时不需要字幕</b>：时间轴没变，原来的 .srt 改名成输出视频同名即可继续用。</div>
+      <div class="modal-actions">
+        <button id="btnOpenBack" class="btn">← 上一步</button>
+        <button id="btnOpenLoadVideoOnly" class="btn">只载入视频</button>
+        <button id="btnOpenLoad" class="btn primary">载入</button>
+      </div>
     </div>
   </div>
 </div>

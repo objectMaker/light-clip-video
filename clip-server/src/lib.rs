@@ -315,6 +315,54 @@ fn export_target(body: &Value, project: &Project) -> Result<Value, String> {
     Ok(serde_json::to_value(res).unwrap_or(Value::Null))
 }
 
+/// Auto-match subtitles next to a video: `video.srt` / `video.vtt`, plus
+/// multi-language siblings like `video.zh.srt` / `video.en.vtt`.
+fn find_sibling_subtitles(video_path: &str) -> Vec<(String, String)> {
+    let vp = Path::new(video_path);
+    let dir = match vp.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return Vec::new(),
+    };
+    let stem = match vp.file_stem() {
+        Some(s) => s.to_string_lossy().to_string(),
+        None => return Vec::new(),
+    };
+    let stem_l = stem.to_lowercase();
+    let mut out: Vec<(String, String)> = Vec::new();
+
+    // Exact same-name files first.
+    for ext in ["srt", "vtt"] {
+        let c = dir.join(format!("{stem}.{ext}"));
+        if c.is_file() {
+            out.push((c.to_string_lossy().to_string(), "zh".to_string()));
+        }
+    }
+
+    // `stem.<group>.srt|vtt`
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lower = name.to_lowercase();
+            let prefix = format!("{stem_l}.");
+            if let Some(rest) = lower.strip_prefix(&prefix) {
+                if !(rest.ends_with(".srt") || rest.ends_with(".vtt")) {
+                    continue;
+                }
+                let group = rest
+                    .trim_end_matches(".srt")
+                    .trim_end_matches(".vtt")
+                    .trim_matches('.')
+                    .to_string();
+                let full = entry.path().to_string_lossy().to_string();
+                if !out.iter().any(|(p, _)| p.eq_ignore_ascii_case(&full)) {
+                    out.push((full, if group.is_empty() { "zh".to_string() } else { group }));
+                }
+            }
+        }
+    }
+    out
+}
+
 fn open_media(body: &Value, state: &Arc<State>, cfg: &ServerConfig) -> Result<Value, String> {
     let mut videos: Vec<String> = body
         .get("videos")
@@ -379,14 +427,19 @@ fn open_media(body: &Value, state: &Arc<State>, cfg: &ServerConfig) -> Result<Va
         .unwrap_or(true);
     if specs.is_empty() && auto {
         for source in &project.sources {
-            let candidate = Path::new(&source.path)
-                .with_extension("srt")
-                .to_string_lossy()
-                .to_string();
-            if Path::new(&candidate).is_file() {
+            for (path, group) in find_sibling_subtitles(&source.path) {
+                let lang = group.clone();
+                let label = if group == "zh" {
+                    "中文".to_string()
+                } else {
+                    group.clone()
+                };
                 specs.push(json!({
-                    "path": candidate, "source_id": source.id,
-                    "group_id": "zh", "label": "中文", "lang": "zh"
+                    "path": path,
+                    "source_id": source.id.clone(),
+                    "group_id": group,
+                    "label": label,
+                    "lang": lang,
                 }));
             }
         }
