@@ -1,0 +1,13 @@
+[package]
+name = "clip-core"
+version = "0.1.0"
+edition = "2021"
+description = "Framework-agnostic core for clip-video (subtitle-synced clipping). Ported 1:1 from the Python core/."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+encoding_rs = "0.8"
+
+[dev-dependencies]
+serde_json = "1"

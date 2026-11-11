@@ -1,0 +1,15 @@
+[package]
+name = "light-clip-video"
+version = "0.1.0"
+edition = "2021"
+description = "Video + subtitle sync editor with automatic subtitle timeline remapping"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+clip-server = { path = "../clip-server" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

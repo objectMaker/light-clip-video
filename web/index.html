@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clip-video · 视频与字幕同步剪辑</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">clip-video</div>
+    <button id="btnOpen" class="btn">打开媒体</button>
+    <span id="projectName" class="project-name">未载入媒体</span>
+    <div class="spacer"></div>
+    <label class="inline"><input type="checkbox" id="snapChk"> 吸附到字幕边界</label>
+    <select id="modeSel" class="select" title="导出方式">
+      <option value="precise" selected>精确模式（帧级准确·回填原片参数）</option>
+      <option value="lossless">无损模式（逐字节原画质·切点吸附关键帧）</option>
+    </select>
+    <button id="btnSaveProject" class="btn tiny" title="把工程存成 JSON，随时可以继续编辑">保存工程</button>
+    <button id="btnLoadProject" class="btn tiny" title="载入之前保存的工程 JSON">打开工程</button>
+    <button id="btnRecent" class="btn tiny" title="最近编辑过的工程，点一下就能接着做">最近工程</button>
+    <button id="btnHelp" class="btn tiny" title="快捷键与操作说明">?</button>
+    <input id="projectFile" type="file" accept=".json,application/json" class="hidden">
+    <button id="btnExport" class="btn primary">导出</button>
+  </header>
+
+  <main class="main">
+    <section class="player-pane">
+      <div class="video-wrap">
+        <video id="video" preload="metadata"></video>
+        <div id="subtitleOverlay" class="subtitle-overlay"></div>
+        <div id="videoPlaceholder" class="video-placeholder">打开视频后在此预览</div>
+      </div>
+      <div class="transport">
+        <div class="play-controls">
+          <button id="btnPlay" class="btn tiny" title="播放 / 暂停（空格）">播放</button>
+          <button id="btnBack" class="btn tiny" title="后退 5 秒（←）">−5s</button>
+          <button id="btnFwd" class="btn tiny" title="前进 5 秒（→）">+5s</button>
+          <button id="btnPreviewOutput" class="btn tiny" title="从第一段开始按输出顺序播放（跳过没保留的部分）">▶ 预览成片</button>
+        </div>
+        <span id="timeLabel" class="mono">00:00:00.000 / 00:00:00.000</span>
+        <div class="spacer"></div>
+        <span id="clipBadge" class="clip-badge">—</span>
+        <select id="groupSel" class="select small" title="预览字幕轨"></select>
+        <label class="inline vol-ctl" title="音量">音量<input id="volSlider" class="vol-slider" type="range" min="0" max="100" value="100"></label>
+        <label class="inline" title="开启后播放器按输出顺序跳过未保留部分，用于预览成片；关闭则自由浏览原片"><input type="checkbox" id="followChk" checked> 跟随输出时间轴</label>
+      </div>
+    </section>
+
+    <aside class="side-pane">
+      <div class="tabs">
+        <button class="tab active" data-tab="clips">片段</button>
+        <button class="tab" data-tab="cues">字幕</button>
+        <button class="tab" data-tab="settings">设置</button>
+      </div>
+
+      <div id="panel-clips" class="panel">
+        <div class="panel-fixed">
+          <div class="panel-toolbar">
+            <select id="sourceSel" class="select small" title="当前编辑的源视频"></select>
+            <div class="spacer"></div>
+            <button id="btnUndo" class="btn tiny" title="撤销（Ctrl+Z）" disabled>撤销</button>
+            <button id="btnRedo" class="btn tiny" title="重做（Ctrl+Shift+Z）" disabled>重做</button>
+            <button id="btnWholeClip" class="btn tiny" title="每个视频生成 0 → 全长的片段，只压缩不剪辑">整片（不剪辑）</button>
+            <button id="btnClearClips" class="btn tiny" title="清空全部片段（可撤销）">清空</button>
+          </div>
+          <div class="hint">空白处拖拽 = 新建片段；拖片段两端 = 只改起/终点；拖中间 = 整体平移。片段按顺序合并。<br>卡片上 ⧉ 复制、✂ 在播放头处拆分、✎ 重命名；<b>直接拖动卡片可改顺序</b>。<br>「整片」= 每个源片自动铺满全长，适合只压缩不剪辑（此时原字幕文件可直接改名复用，不必载入）。</div>
+        </div>
+        <div id="clipList" class="clip-list scroll-area"></div>
+      </div>
+
+      <div id="panel-cues" class="panel hidden">
+        <div class="subtabs">
+          <button class="subtab active" data-sub="pick">选点剪辑</button>
+          <button class="subtab" data-sub="proof">时间校准</button>
+        </div>
+
+        <div id="cuePickArea">
+          <div class="panel-fixed">
+            <div class="panel-toolbar">
+              <input id="cueSearch" class="input small" placeholder="搜索字幕文本">
+              <select id="cueTrackSel" class="select small"></select>
+            </div>
+            <div class="cue-actions">
+              <button id="btnSetStart" class="btn tiny">设为起点</button>
+              <button id="btnSetEnd" class="btn tiny">设为终点</button>
+              <button id="btnFromEndpoints" class="btn tiny">用起止行生成</button>
+            </div>
+            <div class="cue-actions">
+              <button id="btnFromCues" class="btn tiny primary">由勾选行生成片段</button>
+              <button id="btnSelectAll" class="btn tiny" title="只勾选当前搜索结果">全选可见</button>
+              <button id="btnSelectNone" class="btn tiny">清空选择</button>
+            </div>
+            <div class="pad-row">
+              前留白 <input id="padStart" class="input tiny" type="number" value="200"> ms
+              后留白 <input id="padEnd" class="input tiny" type="number" value="300"> ms
+            </div>
+            <div id="endpointInfo" class="hint">未设置起止行</div>
+          </div>
+        </div>
+
+        <div id="cueProofArea" class="hidden">
+          <div class="panel-fixed">
+            <div class="panel-toolbar">
+              <span class="wb-title">字幕时间校准</span>
+              <div class="spacer"></div>
+              <button id="wbLoop" class="btn tiny" title="循环播放当前句，边调边听，立刻看到效果">单句循环：关</button>
+              <button id="wbExportSubs" class="btn tiny" title="只导出矫正后的字幕文件（不碰视频）">只导出字幕</button>
+            </div>
+            <div id="wbEmpty" class="hint">点击右侧字幕列表里的任意一句，就能在这里拖动或微调它的时间；开着「单句循环」边听边改最顺手。</div>
+            <div id="wbBody" class="wb-body hidden">
+              <div class="wb-cuerow">
+                <span id="wbCueLabel" class="wb-cuelabel"></span>
+                <span id="wbStatus" class="wb-status"></span>
+              </div>
+              <div id="wbMiniTl" class="wb-mini-tl" title="拖动两端改起/终点，拖动中间整体平移">
+                <div id="wbCueBar" class="wb-cuebar">
+                  <div id="wbHandleL" class="wb-handle l" title="拖动改起点"></div>
+                  <div id="wbHandleR" class="wb-handle r" title="拖动改终点"></div>
+                </div>
+                <div id="wbPlayhead" class="wb-playhead"></div>
+              </div>
+              <div class="wb-row">
+                <button class="btn tiny" data-wb="prev">▲ 上一句</button>
+                <button class="btn tiny" data-wb="next">▼ 下一句</button>
+                <span class="wb-step">步长
+                  <select id="wbStep" class="select tiny">
+                    <option value="50">50</option>
+                    <option value="100" selected>100</option>
+                    <option value="200">200</option>
+                    <option value="500">500</option>
+                    <option value="1000">1000</option>
+                  </select> ms（按住 Shift = ×5）
+                </span>
+              </div>
+              <div class="wb-row">
+                <button class="btn tiny" data-wb="start-">起点 −</button>
+                <button class="btn tiny" data-wb="start+">起点 ＋</button>
+                <button class="btn tiny" data-wb="end-">终点 −</button>
+                <button class="btn tiny" data-wb="end+">终点 ＋</button>
+              </div>
+              <div class="wb-row">
+                <button class="btn tiny" data-wb="both-">整句前移 −</button>
+                <button class="btn tiny" data-wb="both+">整句后移 ＋</button>
+                <span class="wb-hint">整句平移不改时长</span>
+              </div>
+              <div class="wb-times">
+                起点 <input id="wbStart" class="input tiny time" inputmode="numeric" placeholder="00:00:00.000">
+                终点 <input id="wbEnd" class="input tiny time" inputmode="numeric" placeholder="00:00:00.000">
+                <button id="wbSetTime" class="btn tiny">应用精确时间</button>
+              </div>
+              <div class="wb-row wb-track">
+                整轨偏移
+                <input id="wbTrackDelta" class="input tiny" type="number" value="0"> ms
+                <button id="wbTrackApply" class="btn tiny">应用到本轨</button>
+                <button id="wbTrackApplyAll" class="btn tiny">应用到所有轨</button>
+              </div>
+              <div class="wb-row">
+                <button id="wbReload" class="btn tiny" title="从源字幕文件重新载入，放弃本轨所有矫正">从源文件重载本轨</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="cueCount" class="cue-count"></div>
+        <div id="cueList" class="cue-list scroll-area"></div>
+      </div>
+
+      <div id="panel-settings" class="panel hidden">
+        <div class="panel-fixed settings-head">
+          <div class="settings-nav" id="settingsNav">
+            <button type="button" class="nav-opt active" data-anchor="sec-output">导出位置</button>
+            <button type="button" class="nav-opt" data-anchor="sec-basic">基础</button>
+            <button type="button" class="nav-opt" data-anchor="paramsTitle">转码参数</button>
+            <button type="button" class="nav-opt" data-anchor="sec-help">说明</button>
+          </div>
+          <div class="profile-switch" id="profileSwitch">
+            <button type="button" class="profile-opt" data-profile="source" title="参数全部锁定为原片值">
+              <b>① 沿用原片</b><span>什么都不改</span>
+            </button>
+            <button type="button" class="profile-opt" data-profile="builtin_720p" title="丢 1080p 进来自动压成 720p">
+              <b>② 720p 省体积</b><span>你的预设</span>
+            </button>
+            <button type="button" class="profile-opt" data-profile="custom" title="自己调参数，可保存预设">
+              <b>③ 自定义</b><span>全部参数开放</span>
+            </button>
+          </div>
+          <div id="srcInfo" class="src-info">打开视频后自动读取并回显原片参数</div>
+          <div class="preset-bar" id="presetBar">
+            <select id="savedPresetSel" class="select small" title="已保存的参数预设"></select>
+            <button id="btnApplyPreset" class="btn tiny">应用</button>
+            <button id="btnSavePreset" class="btn tiny primary">另存为</button>
+            <button id="btnDeletePreset" class="btn tiny">删除</button>
+            <button id="btnExportPresets" class="btn tiny">导出</button>
+            <button id="btnImportPresets" class="btn tiny">导入</button>
+            <button id="btnShrinkPreset" class="btn tiny" title="把视频码率设为原片的一半、音频降到 96 kbps，快速压小体积">一键省体积</button>
+            <button id="btnResetEncode" class="btn tiny">恢复原片</button>
+            <input id="presetFile" type="file" accept=".json,application/json" class="hidden">
+          </div>
+          <div id="encSummary" class="enc-summary">全部沿用原片参数</div>
+        </div>
+        <div class="scroll-area settings-scroll">
+          <div id="encCheck" class="enc-check"></div>
+          <div id="profileCard" class="profile-card hidden"></div>
+
+          <div class="section-title" id="sec-output">导出位置 <span class="section-sub">默认在原视频旁边新建同名「剪辑」文件夹</span></div>
+          <label class="field">输出文件夹
+            <div class="path-row">
+              <input id="outDir" class="input" placeholder="留空 = 原视频所在文件夹 / 片名_剪辑">
+              <button id="btnPickOutDir" class="btn tiny" type="button" title="浏览本机文件夹">选择…</button>
+              <button id="btnResetOutDir" class="btn tiny" type="button" title="恢复成原视频旁边的默认文件夹">默认</button>
+            </div>
+          </label>
+          <label class="field">输出文件名（不用写扩展名）<input id="outName" class="input" placeholder="留空 = 片名_剪辑"></label>
+          <div id="outPathInfo" class="path-info">打开视频后自动按第一个源片命名</div>
+          <div class="hint">视频和字幕会一起放进这个文件夹，文件名同源。多次导出同名时<b>不会覆盖</b>，自动变成 <span class="mono">_2</span>、<span class="mono">_3</span>…（视频、字幕、封装版整批一起改号）。</div>
+          <label class="checkbox-row"><input type="checkbox" id="overwriteChk"> 允许覆盖同名文件（仍会保护原始视频不被覆盖）</label>
+          <input id="outPath" type="hidden">
+
+          <div class="section-title" id="sec-basic">基础 <span class="section-sub">编码与选点</span></div>
+          <label class="field">编码速度（越慢，同码率画质越接近原片）
+            <select id="presetSel" class="select">
+              <option value="veryfast">快（veryfast）</option>
+              <option value="medium" selected>均衡（medium，默认）</option>
+              <option value="slow">慢（slow）</option>
+            </select>
+          </label>
+          <label class="field">吸附容差（ms）<input id="snapTol" class="input" type="number" value="500"></label>
+          <label class="checkbox-row"><input type="checkbox" id="embedChk"> 同时把字幕封装进视频</label>
+
+          <div class="section-title" id="paramsTitle">转码参数 <span class="section-sub">全部下拉选择 · 鼠标悬停 ❓ 看影响 · 仅精确模式生效</span></div>
+          <div id="encGroups"></div>
+
+          <details class="help-box">
+            <summary>参数影响速查表（画质 / 体积 / 兼容性）</summary>
+            <div id="encHelp"></div>
+          </details>
+
+          <div class="section-title" id="sec-help">说明 <span class="section-sub">两种导出模式到底做了什么</span></div>
+          <div class="hint">
+            <b>精确模式（默认）</b>：帧级准确，字幕就是「原时间 − 起点」，没有任何补偿或回读。会自动读取原片的位深、profile、level、色彩标签、GOP、B 帧数、音频采样率与声道并<b>回填给编码器</b>（不会再把 10-bit 压成 8-bit）。仍是二次压缩，画质极接近但<b>不是逐字节一致</b>；实测同码率下 medium 比 veryfast 高约 1.7 dB PSNR。<br><br>
+            <b>无损模式</b>：不重新编码，画质逐字节一致；但流拷贝只能从关键帧起刀（起点提前 0~几秒），终点按包截断（每段尾部约多 0.2s，多段合并会逐段累积）。下方转码参数在无损模式下自动忽略，只有字幕格式、容器、faststart 仍生效。<br><br>
+            <b>只压缩不剪辑</b>：选 ② 720p 省体积后，到「片段」页点「整片（不剪辑）」即可铺满全长。此时<b>可以不载入字幕</b>——时间轴没变，原来的 .srt 改名成输出视频同名就能继续用；工具也不会生成多余的字幕文件。
+          </div>
+          <div id="envInfo" class="env-info"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <section id="timelinePane" class="timeline">
+    <div class="tl-head">
+      <div class="tl-title">时间轴</div>
+      <div class="tl-hint">拖拽 = 新建片段 · 拖边缘 = 改单边 · 拖中间 = 平移 · Alt+拖片段 = 改顺序 · 单击 = 定位 · 滚轮 = 平移 · Ctrl+滚轮 = 缩放</div>
+      <div class="spacer"></div>
+      <div class="zoom-bar">
+        <button id="btnZoomOut" class="btn tiny" title="缩小，看得更全">−</button>
+        <button id="btnZoomFit" class="btn tiny" title="恢复显示整片">适应</button>
+        <button id="btnZoomIn" class="btn tiny" title="放大，选点更精确">+</button>
+        <span id="zoomLabel" class="mono">1×</span>
+        <input id="viewScroll" class="view-scroll" type="range" min="0" max="1000" value="0" title="拖动平移时间轴">
+      </div>
+      <span id="tlInfo" class="mono"></span>
+    </div>
+    <div id="ruler" class="ruler"></div>
+    <div id="videoTrack" class="track video-track">
+      <div id="thumbs" class="thumbs"></div>
+      <div id="segmentMarks" class="segment-marks"></div>
+      <div id="selection" class="selection hidden"></div>
+      <div id="dragTip" class="drag-tip hidden"></div>
+      <div id="playhead" class="playhead"></div>
+    </div>
+    <div id="waveTrack" class="track wave-track"><img id="waveImg" alt="波形"></div>
+    <div id="cueTrack" class="track cue-track"></div>
+    <div class="out-lane-head"><span>成片时间轴</span><span id="outLaneInfo" class="mono">尚未添加片段</span></div>
+    <div id="outputTrack" class="track output-track" title="按输出顺序拼接后的成片，单击可跳到该位置">
+      <div id="outSegments" class="out-segments"></div>
+      <div id="outPlayhead" class="out-playhead hidden"></div>
+    </div>
+  </section>
+
+  <footer class="statusbar"><span id="statusText">就绪</span><div class="spacer"></div><span id="statusMeta"></span></footer>
+</div>
+
+<div id="fileDialog" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-title">打开媒体文件</div>
+    <div class="browser-bar">
+      <input id="browsePath" class="input" placeholder="输入目录路径，或从下方盘符进入">
+      <button id="browseGo" class="btn tiny">转到</button>
+      <button id="browseUp" class="btn tiny">上级</button>
+    </div>
+    <div id="browseList" class="browse-list"></div>
+    <div class="modal-subtitle">已选文件</div>
+    <div id="selectedList" class="selected-list"></div>
+    <label class="checkbox-row"><input type="checkbox" id="autoSubChk" checked> 自动匹配同名字幕（整片压缩时取消勾选，就不载入字幕）</label>
+    <div class="hint">可多选视频与字幕。字幕可在右侧下拉里指定归属哪个视频。<b>整片压缩不剪辑时不需要字幕</b>：时间轴没变，原来的 .srt 改名成输出视频同名即可继续用。</div>
+    <div class="modal-actions">
+      <button id="browseCancel" class="btn">取消</button>
+      <button id="browseLoad" class="btn primary">载入</button>
+    </div>
+  </div>
+</div>
+
+<div id="exportDialog" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-title">导出</div>
+    <div id="exportStatus" class="export-status">准备中…</div>
+    <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+    <div id="exportResult" class="export-result"></div>
+    <div id="exportActions" class="export-actions hidden"><button id="btnReveal" class="btn tiny">打开所在文件夹</button></div>
+    <div class="modal-actions"><button id="exportClose" class="btn">关闭</button></div>
+  </div>
+</div>
+
+<div id="confirmDialog" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-title">导出前检查：这些设置可能白花空间</div>
+    <div id="confirmSize" class="confirm-size"></div>
+    <div id="confirmList" class="confirm-list"></div>
+    <div class="hint">可以返回「设置」页改参数，也可以直接继续导出。</div>
+    <div class="modal-actions">
+      <button id="confirmCancel" class="btn">返回修改</button>
+      <button id="confirmGo" class="btn primary">仍然导出</button>
+    </div>
+  </div>
+</div>
+
+<div id="helpDialog" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-title">快捷键与操作说明</div>
+    <div class="help-grid">
+      <div><b>空格</b><span>播放 / 暂停</span></div>
+      <div><b>← / →</b><span>后退 / 前进 5 秒</span></div>
+      <div><b>i / o</b><span>当前字幕行设为起点 / 终点</span></div>
+      <div><b>Ctrl+Z / Ctrl+Shift+Z</b><span>撤销 / 重做（片段与字幕校准通用）</span></div>
+      <div><b>Ctrl+S</b><span>立即保存工程到磁盘</span></div>
+      <div><b>Ctrl+E</b><span>只导出矫正后的字幕</span></div>
+      <div><b>字幕 → 时间校准</b><span>切到校准页：拖动迷你时间条、用按钮 ±微调、开「单句循环」边听边改</span></div>
+      <div><b>, / .</b><span>当前句整体前移 / 后移一步（按住 Shift = ×5）</span></div>
+      <div><b>↑ / ↓</b><span>上一句 / 下一句（播放头跟着跳过去）</span></div>
+      <div><b>滚轮</b><span>平移时间轴</span></div>
+      <div><b>Ctrl + 滚轮</b><span>以光标为中心缩放</span></div>
+      <div><b>时间轴单击</b><span>定位播放头</span></div>
+      <div><b>时间轴拖拽</b><span>新建片段</span></div>
+      <div><b>拖片段两端 / 中间</b><span>只改单边 / 整体平移</span></div>
+      <div><b>Esc</b><span>取消正在进行的片段拖动</span></div>
+      <div><b>片段卡片 ⧉ / ✂ / ✎</b><span>复制 / 在播放头处拆分 / 重命名</span></div>
+      <div><b>拖动片段卡片</b><span>上下拖拽调整合并顺序</span></div>
+      <div><b>Alt + 拖时间轴片段</b><span>拖到另一段上改变合并顺序</span></div>
+      <div><b>成片时间轴单击</b><span>按输出时间定位，跳过未保留部分</span></div>
+    </div>
+    <div class="hint">长视频建议先放大时间轴再选点，选完点「适应」回到整片视图。</div>
+    <div class="modal-actions"><button id="helpClose" class="btn primary">知道了</button></div>
+  </div>
+</div>
+
+<div id="dirDialog" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-title">选择导出文件夹</div>
+    <div class="browser-bar">
+      <input id="dirBrowsePath" class="input" placeholder="输入目录路径，或从下方盘符进入">
+      <button id="dirBrowseGo" class="btn tiny">转到</button>
+      <button id="dirBrowseUp" class="btn tiny">上级</button>
+      <button id="dirBrowseNew" class="btn tiny" title="在当前目录下新建一个文件夹">新建文件夹</button>
+    </div>
+    <div id="dirBrowseList" class="browse-list"></div>
+    <div class="hint">视频和字幕会一起放进所选文件夹，名字仍按原视频生成。留空可恢复默认的「原视频旁边 / 片名_剪辑」。</div>
+    <div class="modal-actions">
+      <button id="dirUseDefault" class="btn">用默认位置</button>
+      <button id="dirCancel" class="btn">取消</button>
+      <button id="dirChoose" class="btn primary">就用这个文件夹</button>
+    </div>
+  </div>
+</div>
+
+<div id="recentDialog" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-title">最近工程</div>
+    <div id="recentList" class="recent-list"></div>
+    <div class="hint">工程保存在本机浏览器里，包含片段、字幕轨和参数；源视频仍需在原来的位置。点「载入」会检查视频是否还在。</div>
+    <div class="modal-actions">
+      <button id="recentClose" class="btn">关闭</button>
+      <button id="recentImport" class="btn">从 JSON 文件导入…</button>
+    </div>
+  </div>
+</div>
+
+<div id="tipBox" class="tip-box hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
