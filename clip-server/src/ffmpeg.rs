@@ -17,6 +17,58 @@ use serde_json::Value;
 
 pub type Progress = dyn Fn(i64, &str);
 
+/// Removes the export temp dir when the export finishes, whether it
+/// succeeded or failed, so no temp files are left behind.
+struct WorkdirGuard(PathBuf);
+
+impl Drop for WorkdirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Single-segment export: move the finished segment straight to the final
+/// name instead of running ffmpeg to copy the whole file again. The segment
+/// file already sits in the output folder, so the rename is instant and
+/// needs no extra disk space.
+///
+/// Returns true when the rename was done. Returns false (caller must run the
+/// ffmpeg concat copy pass instead) when the shape is unexpected, the
+/// segment is not in the same folder tree, the rename failed, or the concat
+/// pass would add +faststart that the segment file does not have yet.
+fn rename_single_segment(plan: &ExportPlan, output_path: &str) -> bool {
+    if plan.segment_commands.len() != 1 {
+        return false;
+    }
+    let has_flag = |cmd: &[String], flag: &str| {
+        cmd.windows(2)
+            .any(|w| w[0] == "-movflags" && w[1] == flag)
+    };
+    // The concat copy would add +faststart for mp4; only skip it when the
+    // segment already carries faststart (both the encode and the lossless
+    // segment commands apply it when the project asks for it).
+    if has_flag(&plan.concat_command, "+faststart")
+        && !has_flag(&plan.segment_commands[0], "+faststart")
+    {
+        return false;
+    }
+    // concat = [ffmpeg, -y, -v, error, -i, <segment>, -c, copy, ..., <output>]
+    let Some(i_pos) = plan
+        .concat_command
+        .iter()
+        .position(|s| s == "-i")
+    else {
+        return false;
+    };
+    let Some(seg) = plan.concat_command.get(i_pos + 1) else {
+        return false;
+    };
+    if plan.concat_command.last().map(|s| s.as_str()) != Some(output_path) {
+        return false;
+    }
+    std::fs::rename(Path::new(seg), Path::new(output_path)).is_ok()
+}
+
 /// Spawn a child process WITHOUT flashing a console window on Windows.
 ///
 /// The Python original set `creationflags=CREATE_NO_WINDOW`. Without it, every
@@ -288,8 +340,18 @@ pub fn execute_export(
         bitrate_by_source.insert(s.id.clone(), (vb, ab));
     }
 
-    let workdir = std::env::temp_dir().join(format!("clipvideo_{}", std::process::id()));
+    // Temp files live inside the output folder (same drive as the final
+    // video), not in the system temp dir: no cross-drive copy, and every
+    // step of the export happens where the result ends up. The guard below
+    // deletes the temp dir when the export returns, success or failure.
+    let workdir = match Path::new(output_path).parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => {
+            dir.join(format!(".clipvideo-tmp-{}", std::process::id()))
+        }
+        _ => std::env::temp_dir().join(format!("clipvideo_{}", std::process::id())),
+    };
     std::fs::create_dir_all(&workdir).map_err(|e| e.to_string())?;
+    let _workdir_guard = WorkdirGuard(workdir.clone());
     let workdir_str = workdir.to_string_lossy().to_string();
     let ffmpeg_str = ffmpeg.to_string_lossy().to_string();
 
@@ -322,7 +384,10 @@ pub fn execute_export(
         run_ffmpeg_progress(ffmpeg, cmd, dur, start as f64, span as f64, on_progress)?;
     }
 
-    // Concatenation (single segment still needs a copy pass for the final path).
+    // Concatenation. Several segments still need the ffmpeg concat pass to
+    // merge them into one file. With a single segment there is nothing to
+    // merge, so the segment is renamed to the final name instead of being
+    // copied again; when the rename is not possible the copy pass runs.
     if plan.segment_commands.len() > 1 {
         let list_path = workdir.join("_concat_list.txt");
         let mut content = String::new();
@@ -334,7 +399,11 @@ pub fn execute_export(
         std::fs::write(&list_path, content).map_err(|e| e.to_string())?;
     }
     on_progress(86, "正在合并片段");
-    run_ffmpeg_progress(ffmpeg, &plan.concat_command, 1, 86.0, 14.0, on_progress)?;
+    if !rename_single_segment(&plan, output_path) {
+        run_ffmpeg_progress(ffmpeg, &plan.concat_command, 1, 86.0, 14.0, on_progress)?;
+    } else {
+        on_progress(99, "正在合并片段");
+    }
 
     // Write the remapped subtitle files.
     let base = Path::new(&plan.output_video)
@@ -478,6 +547,117 @@ pub fn waveform_png(ffmpeg: &Path, path: &str) -> Option<Vec<u8>> {
         Some(out.stdout)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn plan_with(
+        segments: Vec<Vec<String>>,
+        concat: Vec<String>,
+        output_video: &str,
+    ) -> ExportPlan {
+        ExportPlan {
+            segment_commands: segments,
+            concat_command: concat,
+            embed_command: None,
+            output_video: output_video.to_string(),
+            subtitles: HashMap::new(),
+            subtitle_format: "srt".to_string(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn tmp_file(dir: &Path, name: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, b"fake segment").unwrap();
+        p
+    }
+
+    #[test]
+    fn rename_single_segment_moves_file_no_faststart() {
+        let dir = std::env::temp_dir().join(format!("clipvideo_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let seg = tmp_file(&dir, "seg_000.mp4");
+        let out = dir.join("final.mp4");
+        let plan = plan_with(
+            vec![vec!["ffmpeg".into(), "-i".into(), "in.mp4".into(), seg.to_string_lossy().to_string()]],
+            vec![
+                "ffmpeg".into(), "-y".into(), "-v".into(), "error".into(),
+                "-i".into(), seg.to_string_lossy().to_string(),
+                "-c".into(), "copy".into(),
+                out.to_string_lossy().to_string(),
+            ],
+            &out.to_string_lossy(),
+        );
+        assert!(rename_single_segment(&plan, &out.to_string_lossy()));
+        assert!(!seg.exists());
+        assert!(out.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_single_segment_skipped_when_concat_adds_faststart() {
+        let dir = std::env::temp_dir().join(format!("clipvideo_test2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let seg = tmp_file(&dir, "seg_000.mp4");
+        let out = dir.join("final.mp4");
+        // Concat would add +faststart, segment has none: keep the copy pass.
+        let plan = plan_with(
+            vec![vec!["ffmpeg".into(), "-i".into(), "in.mp4".into(), seg.to_string_lossy().to_string()]],
+            vec![
+                "ffmpeg".into(), "-y".into(), "-v".into(), "error".into(),
+                "-i".into(), seg.to_string_lossy().to_string(),
+                "-c".into(), "copy".into(),
+                "-movflags".into(), "+faststart".into(),
+                out.to_string_lossy().to_string(),
+            ],
+            &out.to_string_lossy(),
+        );
+        assert!(!rename_single_segment(&plan, &out.to_string_lossy()));
+        assert!(seg.exists());
+        assert!(!out.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_single_segment_moves_when_both_have_faststart() {
+        let dir = std::env::temp_dir().join(format!("clipvideo_test3_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let seg = tmp_file(&dir, "seg_000.mp4");
+        let out = dir.join("final.mp4");
+        let plan = plan_with(
+            vec![vec![
+                "ffmpeg".into(), "-i".into(), "in.mp4".into(),
+                "-movflags".into(), "+faststart".into(),
+                seg.to_string_lossy().to_string(),
+            ]],
+            vec![
+                "ffmpeg".into(), "-y".into(), "-v".into(), "error".into(),
+                "-i".into(), seg.to_string_lossy().to_string(),
+                "-c".into(), "copy".into(),
+                "-movflags".into(), "+faststart".into(),
+                out.to_string_lossy().to_string(),
+            ],
+            &out.to_string_lossy(),
+        );
+        assert!(rename_single_segment(&plan, &out.to_string_lossy()));
+        assert!(!seg.exists());
+        assert!(out.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_single_segment_rejects_multi_segment() {
+        let plan = plan_with(
+            vec![vec!["ffmpeg".into()], vec!["ffmpeg".into()]],
+            vec!["ffmpeg".into(), "-i".into(), "list.txt".into(), "out.mp4".into()],
+            "out.mp4",
+        );
+        assert!(!rename_single_segment(&plan, "out.mp4"));
     }
 }
 
