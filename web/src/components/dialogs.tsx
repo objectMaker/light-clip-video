@@ -168,6 +168,12 @@ export function ExportDialog({ app }: { app: AppApi }) {
                 <br />
               </>
             )}
+            {r.outputDir && (
+              <>
+                输出文件夹: <b className="break-all text-foreground">{r.outputDir}</b>
+                <br />
+              </>
+            )}
             字幕:
             <br />
             {Object.entries(r.subtitles).length

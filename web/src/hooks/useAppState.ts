@@ -51,6 +51,8 @@ export interface ExportResultData {
   warnings: string[]
   renamedFrom: string | null
   reuseNote: string
+  /** Folder the exported files actually landed in (shown in the dialog). */
+  outputDir: string
 }
 
 const ZOOM_STEPS = [1, 2, 4, 8, 16, 32]
@@ -1012,6 +1014,7 @@ export function useAppState() {
         warnings: [],
         renamedFrom: res.renamed_from?.join(', ') || null,
         reuseNote: '',
+        outputDir: res.dir,
       })
       setExportError(null)
       setExportProgress(100)
@@ -1058,6 +1061,7 @@ export function useAppState() {
           warnings: r.warnings || [],
           renamedFrom: r.renamed_from ? String(r.video || '').split(/[\\/]/).pop() || null : null,
           reuseNote,
+          outputDir: r.output_dir || '',
         })
         setExportError(null)
         setRevealPath(r.video || r.output_dir || '')
@@ -1203,9 +1207,13 @@ export function useAppState() {
   const reveal = useCallback(async () => {
     if (!revealPath) return
     try {
-      await apiClient.reveal(revealPath)
-      setStatus('已在文件管理器中打开输出文件夹')
+      // The backend returns the exact path it opened; show it so the user
+      // can see where the files are, and a wrong folder cannot hide.
+      const res = await apiClient.reveal(revealPath)
+      setStatus('已在文件管理器中打开：' + (res.opened || revealPath))
     } catch (e) {
+      // The backend names the expected path in the error (e.g. 路径不存在),
+      // so a missing file never silently opens a wrong folder instead.
       setStatus('打开文件夹失败: ' + (e as Error).message)
     }
   }, [revealPath])

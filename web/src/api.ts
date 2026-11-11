@@ -66,7 +66,7 @@ export const apiClient = {
   startExport: (body: { output_dir: string; output_name: string; overwrite: boolean }) =>
     post<{ task_id: string; output_path: string; renamed_from: string | null }>('/api/export', body),
   exportStatus: (id: string) => api<ExportStatus>(`/api/export/status?${q({ id })}`),
-  reveal: (path: string) => post<{ ok: boolean; opened: boolean }>('/api/reveal', { path, dry_run: false }),
+  reveal: (path: string) => post<{ ok: boolean; opened: string }>('/api/reveal', { path, dry_run: false }),
   mkdir: (parent: string, name: string) => post<{ path: string }>('/api/mkdir', { parent, name }),
 }
 

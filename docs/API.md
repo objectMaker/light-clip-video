@@ -170,7 +170,7 @@
 返回 `{task_id, output_path, renamed_from}`；随后轮询 `GET /api/export/status?id=...` 直到 `status` 为 `done`/`error`。完成时 `result` 含 `{video, output_dir, subtitles, warnings, srt, vtt, segments, total_ms}`。
 
 ### `POST /api/reveal`
-在文件管理器中定位/打开。`{path, dry_run}` → `{ok, opened}`。
+在文件管理器中定位/打开。`{path, dry_run}` → `{ok, opened}`，其中 `opened` 是实际打开的绝对路径（字符串）。文件会用 `explorer.exe /select,"<path>"` 选中打开（路径带引号，含空格/中文也能定位到正确文件夹）；文件夹直接打开。路径不存在时返回错误并写明期望的路径，绝不退回打开文档等其他文件夹。
 
 ### `POST /api/mkdir`
 新建文件夹。`{parent, name}` → `{path}`。

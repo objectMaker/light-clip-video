@@ -451,9 +451,15 @@ fn open_media(body: &Value, state: &Arc<State>, cfg: &ServerConfig) -> Result<Va
         if !Path::new(&path).is_file() {
             return Err(format!("字幕不存在: {path}"));
         }
+        // An empty source_id means "not specified" (the UI always sends a
+        // real id, but API callers may send ""). Without this, the track
+        // would match no clip: tracks_for_clip only picks tracks whose
+        // source_id equals the clip's, so whole-film clips (track_ids empty)
+        // would silently export no subtitles at all.
         let source_id = spec
             .get("source_id")
             .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .map(String::from)
             .unwrap_or_else(|| {
                 project
@@ -814,6 +820,29 @@ fn extract_embedded_subtitle(body: &Value, state: &Arc<State>, cfg: &Arc<ServerC
     Ok(json!({ "project": project, "state": st, "track_id": track_id, "path": out_str, "reused": false }))
 }
 
+/// The exact raw argument string passed to `explorer.exe` on Windows.
+///
+/// A path with spaces MUST be quoted: the old code passed a single
+/// unquoted `/select,<path>` argument, and Explorer then failed to resolve
+/// the target and silently fell back to opening the Documents folder
+/// (reproduced in the user's interactive session on ybf2 with the real
+/// export path `E:\...\The.Office.US.S06E01.1080p.NF.WEB.x264-MRSK_剪辑.mp4`,
+/// whose parent folder contains spaces). The quoted form
+/// `explorer.exe /select,"<path>"` opens the exact folder with the file
+/// selected, and `explorer.exe "<dir>"` opens the exact folder; both were
+/// verified the same way. The string is passed verbatim via `raw_arg` so
+/// Rust's own argument quoting cannot change it.
+fn explorer_args(is_file: bool, target: &str) -> Result<String, String> {
+    if target.contains('"') {
+        return Err(format!("路径中含有非法字符: {target}"));
+    }
+    if is_file {
+        Ok(format!("/select,\"{target}\""))
+    } else {
+        Ok(format!("\"{target}\""))
+    }
+}
+
 fn reveal_path(path: &str, dry_run: bool) -> Result<Value, String> {
     let target = clean_abs(path);
     let is_file = Path::new(&target).is_file();
@@ -826,19 +855,27 @@ fn reveal_path(path: &str, dry_run: bool) -> Result<Value, String> {
     }
     #[cfg(windows)]
     {
-        if is_file {
-            let _ = std::process::Command::new("explorer")
-                .arg(format!("/select,{target}"))
-                .spawn();
-        } else {
-            let _ = std::process::Command::new("explorer").arg(&target).spawn();
-        }
+        use std::os::windows::process::CommandExt;
+        let args = explorer_args(is_file, &target)?;
+        // Never fall back to another folder: if explorer cannot be started,
+        // report the failure with the expected path instead of opening
+        // Documents / home / This PC.
+        std::process::Command::new("explorer")
+            .raw_arg(args)
+            .spawn()
+            .map_err(|e| format!("无法打开文件管理器（目标: {target}）: {e}"))?;
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(Path::new(&target).parent().unwrap_or(Path::new("/")).to_string_lossy().to_string())
-            .spawn();
+        let dir = if is_file {
+            Path::new(&target).parent().unwrap_or(Path::new("/")).to_string_lossy().to_string()
+        } else {
+            target.clone()
+        };
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("无法打开文件管理器（目标: {target}）: {e}"))?;
     }
     Ok(json!({ "ok": true, "opened": target }))
 }
@@ -1527,5 +1564,45 @@ pub fn run_with_listener(listener: std::net::TcpListener, cfg: ServerConfig) -> 
                 thread::sleep(std::time::Duration::from_millis(5));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reveal_file_with_spaces_and_chinese_is_quoted() {
+        // dd's real export path: parent folder contains spaces, file name Chinese.
+        let args = explorer_args(
+            true,
+            r"E:\BaiduNetdiskDownload\The.Office.US.S06.Season.6.Complete.1080p.NF.WEB.x264-maximersk [mrsktv]\The.Office.US.S06E01.1080p.NF.WEB.x264-MRSK_剪辑\The.Office.US.S06E01.1080p.NF.WEB.x264-MRSK_剪辑.mp4",
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            r#"/select,"E:\BaiduNetdiskDownload\The.Office.US.S06.Season.6.Complete.1080p.NF.WEB.x264-maximersk [mrsktv]\The.Office.US.S06E01.1080p.NF.WEB.x264-MRSK_剪辑\The.Office.US.S06E01.1080p.NF.WEB.x264-MRSK_剪辑.mp4""#
+        );
+    }
+
+    #[test]
+    fn reveal_file_without_spaces_is_quoted_too() {
+        assert_eq!(
+            explorer_args(true, r"C:\test\nospace\video.mp4").unwrap(),
+            r#"/select,"C:\test\nospace\video.mp4""#
+        );
+    }
+
+    #[test]
+    fn reveal_directory_with_spaces_is_quoted() {
+        assert_eq!(
+            explorer_args(false, r"C:\Users\ybf2\reveal-test\with space").unwrap(),
+            r#""C:\Users\ybf2\reveal-test\with space""#
+        );
+    }
+
+    #[test]
+    fn reveal_path_with_quote_is_rejected_not_fallback() {
+        assert!(explorer_args(true, "C:\\bad\"path\\video.mp4").is_err());
     }
 }
