@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "cn.lightclipvideo.app",
   "build": {
-    "frontendDist": "../web"
+    "frontendDist": "../web/dist",
+    "beforeBuildCommand": "npm --prefix ../web run build"
   },
   "app": {
     "windows": [],

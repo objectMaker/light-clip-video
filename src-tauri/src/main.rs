@@ -11,10 +11,15 @@ fn home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Locate the bundled `web/` directory. In development it lives next to the
-/// crate; in the packaged app it is copied into the resource dir.
+/// Locate the bundled `web/dist/` directory (Vite build output). In
+/// development it lives next to the crate; in the packaged app it is copied
+/// into the resource dir.
 fn find_web_dir(resource_dir: &Path) -> PathBuf {
     let candidates = [
+        resource_dir.join("web/dist"),
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/dist")),
+        std::env::current_dir().unwrap_or_default().join("web/dist"),
+        // Legacy fallback: a plain (unbuilt) web/ directory.
         resource_dir.join("web"),
         PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web")),
         std::env::current_dir().unwrap_or_default().join("web"),
@@ -24,7 +29,7 @@ fn find_web_dir(resource_dir: &Path) -> PathBuf {
             return c.clone();
         }
     }
-    resource_dir.join("web")
+    resource_dir.join("web/dist")
 }
 
 fn main() {

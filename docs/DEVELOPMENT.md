@@ -31,9 +31,9 @@ rustup default stable-x86_64-pc-windows-gnu
 ```cmd
 cargo run -p light-clip-video                 :: 打开桌面窗口（开发）
 cargo test -p clip-core                       :: 领域逻辑单测（35+ 项）
-cargo run -p clip-server --example serve -- 8765   :: 只起 HTTP 服务，浏览器调试
-cargo build --release -p light-clip-video     :: 发布 exe -> target/release/
-node --check web/app.js                       :: 前端语法自检
+cargo run -p clip-server --example serve -- 8765   :: 只起 HTTP 服务，浏览器调试（先 npm run build，前端在 web/dist/）
+cd web && npm run build                       :: 前端构建（TypeScript + Vite）
+cd web && npm run dev                         :: 前端开发服务（代理 /api 到 8765）
 ```
 
 ## 代码结构与"加功能"的正确姿势
@@ -52,8 +52,8 @@ node --check web/app.js                       :: 前端语法自检
 ## 测试
 
 - `cargo test -p clip-core`：覆盖 SRT 解析、字幕矫正、重映射、命名编号、参数检查、命令构造。
+- 前端验证：`cd web && npm run build`（TypeScript + Vite 必须通过），再起 `serve` example，用浏览器验证。
 - 手工联调：起 `serve` example，用 `curl --noproxy '*'` 或浏览器验证。
-- 前端没有构建步骤，改完 `web/*` 直接刷新即可（Tauri 窗口需重启进程才会重新读取磁盘文件）。
 
 ## 打包发布
 

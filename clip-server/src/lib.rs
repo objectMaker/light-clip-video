@@ -965,7 +965,21 @@ fn start_export(body: &Value, state: &Arc<State>, cfg: &Arc<ServerConfig>) -> Re
 // ---------------------------------------------------------------------------
 
 fn serve_static(req: Request, web_dir: &Path, name: &str) {
+    // Path-traversal guard: only plain relative paths inside web_dir (the Vite
+    // build output) may be served. Anything else is a 404, never a file read.
+    if name.contains("..") || name.contains('\\') || name.starts_with('/') {
+        respond_err(req, name, 404);
+        return;
+    }
     let path = web_dir.join(name);
+    // Defense in depth: canonicalize and require the result to stay under
+    // web_dir even if a symlink is involved.
+    if let (Ok(base), Ok(canon)) = (web_dir.canonicalize(), path.canonicalize()) {
+        if !canon.starts_with(&base) {
+            respond_err(req, name, 404);
+            return;
+        }
+    }
     match std::fs::read(&path) {
         Ok(data) => {
             let ctype = match path.extension().and_then(|e| e.to_str()) {
@@ -975,6 +989,9 @@ fn serve_static(req: Request, web_dir: &Path, name: &str) {
                 Some("json") => "application/json; charset=utf-8",
                 Some("svg") => "image/svg+xml",
                 Some("png") => "image/png",
+                Some("ico") => "image/x-icon",
+                Some("woff") => "font/woff",
+                Some("woff2") => "font/woff2",
                 _ => "application/octet-stream",
             };
             let mut resp = Response::from_data(data).with_status_code(200);
@@ -1066,9 +1083,11 @@ fn route_get(req: Request, route: &str, q: &HashMap<String, String>, state: &Arc
     let get = |k: &str| q.get(k).map(|s| s.as_str()).unwrap_or("");
 
     match route {
+        // Vite build output (web/dist): index.html plus hashed /assets/* files.
         "/" | "/index.html" => serve_static(req, &cfg.web_dir, "index.html"),
-        "/app.js" => serve_static(req, &cfg.web_dir, "app.js"),
-        "/style.css" => serve_static(req, &cfg.web_dir, "style.css"),
+        r if r.starts_with("/assets/") => {
+            serve_static(req, &cfg.web_dir, r.trim_start_matches('/'))
+        }
         "/api/project" => {
             let project = state.project.lock().unwrap().clone();
             match preview_state(&project) {

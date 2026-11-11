@@ -2,7 +2,7 @@
 
 一个本地「视频 + 字幕」同步剪辑工具：在时间轴上选点、按字幕行选点，**字幕时间轴随剪辑自动重映射**。视频与字幕共用同一份 `[in, out]` 边界，预览与导出走同一套逻辑——不需要事后回读视频，也不需要给字幕单独算偏差。
 
-本仓库是原 Python 版本（标准库 + 浏览器前端）的 **Tauri 2 桌面移植版**：核心领域逻辑用 Rust 1:1 重写，前端保持原样，`ffmpeg` / `ffprobe` 作为 sidecar 打包进应用。
+本仓库是原 Python 版本（标准库 + 浏览器前端）的 **Tauri 2 桌面移植版**：核心领域逻辑用 Rust 1:1 重写，`ffmpeg` / `ffprobe` 作为 sidecar 打包进应用。前端是 **React + Vite + Tailwind + shadcn/ui**（`web/`，构建产物在 `web/dist/`，由内嵌服务提供）。
 
 - 运行形态：一个原生窗口（Tauri 2），内部启动一个本地 HTTP 服务，WebView 加载它。
 - 产物：`light-clip-video.exe`（单文件，可自带 ffmpeg）。
@@ -45,6 +45,9 @@ linker = "C:\\mingw64\\bin\\x86_64-w64-mingw32-gcc.exe"
 ### 构建 / 运行
 
 ```cmd
+:: 0) 前端：先安装依赖并构建（产物在 web/dist/，服务与 Tauri 都读它）
+cd web && npm install && npm run build && cd ..
+
 :: 1) 复制系统 ffmpeg/ffprobe 到 src-tauri\bin（打包用；不做也能运行，会回退到 PATH）
 powershell -ExecutionPolicy Bypass -File scripts\fetch_ffmpeg.ps1
 
@@ -89,7 +92,8 @@ light-clip-video/
 │  ├─ src/main.rs
 │  ├─ tauri.conf.json
 │  └─ bin/           # ffmpeg/ffprobe sidecar（gitignore，构建前用脚本复制）
-├─ web/             # 原前端（HTML/JS/CSS），零改动复用
+├─ web/             # 前端：React 19 + Vite + Tailwind + shadcn/ui（src/ 按模块拆分）
+│  └─ dist/          # 构建产物（npm run build 生成，服务与 Tauri 都读它，不进仓库）
 ├─ scripts/         # 图标生成、ffmpeg 复制
 └─ docs/            # 使用 / 架构 / API / 开发文档（见下）
 ```
@@ -108,7 +112,7 @@ light-clip-video/
 - **单一坐标系**：每个片段只有一份 `[in_ms, out_ms]`，视频切点和字幕平移都读它；字幕公式永远是 `t - in + offset`。**禁止**导出后回读视频再补偿字幕（历史上这造成过 9.4s 漂移）。
 - **边界是表达式**：`Boundary = Time(ms) | CueRef(track,index,edge,padding)`，延迟到使用时才解析，所以字幕改时间后切点自动联动。
 - **无损模式只吸附一次关键帧**：起点吸附到最近的关键帧（向下取整到毫秒），吸附后的 `in_ms` 就是唯一真源；命令必须是 `-ss <in> -i <src> -t <dur> -c copy`，禁止 `-avoid_negative_ts` / `-fflags +genpts`。
-- **为什么内嵌 HTTP 而不是 `invoke`**：前端约 20 个接口，缩略图 / 波形 / 视频播放都依赖 HTTP 流式与 Range 请求。保持 HTTP 契约可以让 128 KB 前端一行不改，风险最低。
+- **为什么内嵌 HTTP 而不是 `invoke`**：前端约 20 个接口，缩略图 / 波形 / 视频播放都依赖 HTTP 流式与 Range 请求。保持 HTTP 契约可以让前端改版风险最低。
 - **ffmpeg 一律 `CREATE_NO_WINDOW`**：否则加载一个视频会弹几十个黑框。
 
 ## 许可证

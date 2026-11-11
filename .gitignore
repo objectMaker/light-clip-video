@@ -22,3 +22,10 @@ Thumbs.db
 # Local test artefacts
 /tests/fixtures/
 /output/
+
+# Frontend build output and dependencies (rebuilt with `npm run build`)
+/web/dist/
+/web/node_modules/
+
+# Local verification screenshots (never committed)
+/.verify/

@@ -18,7 +18,7 @@ fn main() {
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(8765);
-    let web_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web");
+    let web_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web/dist");
     let (ffmpeg_bin, ffprobe_bin) =
         clip_server::ffmpeg::resolve_bins(std::path::Path::new("."), None, None);
     let cfg = clip_server::ServerConfig {
