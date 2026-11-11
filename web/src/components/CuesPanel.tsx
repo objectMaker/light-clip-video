@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ChevronDown, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,11 @@ export function CuesPanel({ app }: { app: AppApi }) {
   // Embedded subtitle streams of the current video that have not been
   // extracted yet as a usable track.
   const embeddedForSource = (app.embeddedSubs || []).filter((s) => s.source_id === app.activeSource)
+  // Collapsed by default: the embedded list used to eat a lot of screen
+  // space with no way to hide it. The header always stays visible with
+  // the track count and the track currently used for clipping.
+  const [embeddedOpen, setEmbeddedOpen] = useState(false)
+  const cueTrackObj = (app.project?.tracks || []).find((t) => t.id === app.cueTrack)
   // The list comes from /api/open, so after a reload / project restore it
   // is empty: probe the current video once so the embedded section shows.
   useEffect(() => {
@@ -61,33 +66,51 @@ export function CuesPanel({ app }: { app: AppApi }) {
 
             {/* Embedded subtitle streams in the current video: extract
                 (separate) one to an SRT track, then use it for clipping
-                like any other track. */}
-            {embeddedForSource.length > 0 && (
-              <div className="mb-2 rounded-md border p-2.5">
-                <div className="mb-1.5 text-xs font-medium">内嵌字幕（视频自带）</div>
-                <div className="space-y-1.5">
-                  {embeddedForSource.map((s) => (
-                    <div key={s.index} className="flex items-center gap-2 text-xs">
-                      <span className="min-w-0 flex-1 truncate">
-                        {s.title || s.language || `字幕流 #${s.index}`} · {s.codec || '未知编码'}
-                        {s.language ? ` · ${s.language}` : ''}
-                      </span>
-                      {s.text ? (
-                        <Button size="sm" variant="outline" className="h-6 shrink-0 text-xs" onClick={() => void app.extractEmbedded(s)}>
-                          提取并使用
-                        </Button>
-                      ) : (
-                        <span className="shrink-0 text-muted-foreground">图片字幕，无法提取</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                like any other track. Collapsible: the header row always
+                shows, the list only when the user opens it. */}
+            {(embeddedForSource.length > 0 || app.currentSource) && (
+              <div className="mb-2 rounded-md border">
+                <button
+                  type="button"
+                  aria-expanded={embeddedOpen}
+                  onClick={() => setEmbeddedOpen((o) => !o)}
+                  className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-2 text-left text-xs font-medium hover:bg-muted/50"
+                >
+                  <ChevronDown className={`size-4 shrink-0 transition-transform ${embeddedOpen ? 'rotate-180' : ''}`} />
+                  <span className="shrink-0">内嵌字幕（视频自带）</span>
+                  {embeddedForSource.length > 0 && <span className="shrink-0 text-muted-foreground">· {embeddedForSource.length} 条</span>}
+                  {cueTrackObj && (
+                    <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground">
+                      当前：{cueTrackObj.label || cueTrackObj.group_id} · {cueTrackObj.cues.length} 条
+                      {cueTrackObj.origin === 'embedded' ? '（内嵌）' : cueTrackObj.origin === 'external' ? '（外挂）' : ''}
+                    </span>
+                  )}
+                </button>
+                {embeddedOpen && (
+                  <div className="space-y-1.5 px-2.5 pb-2.5">
+                    {embeddedForSource.map((s) => (
+                      <div key={s.index} className="flex items-center gap-2 text-xs">
+                        <span className="min-w-0 flex-1 truncate">
+                          {s.title || s.language || `字幕流 #${s.index}`} · {s.codec || '未知编码'}
+                          {s.language ? ` · ${s.language}` : ''}
+                        </span>
+                        {s.text ? (
+                          <Button size="sm" variant="outline" className="h-6 shrink-0 text-xs" onClick={() => void app.extractEmbedded(s)}>
+                            提取并使用
+                          </Button>
+                        ) : (
+                          <span className="shrink-0 text-muted-foreground">图片字幕，无法提取</span>
+                        )}
+                      </div>
+                    ))}
+                    {embeddedForSource.length === 0 && (
+                      <Button size="sm" variant="outline" className="h-7 self-start text-xs" onClick={() => void app.refreshEmbedded()}>
+                        检测视频内嵌字幕
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
-            {embeddedForSource.length === 0 && app.currentSource && (
-              <Button size="sm" variant="outline" className="mb-2 h-7 self-start text-xs" onClick={() => void app.refreshEmbedded()}>
-                检测视频内嵌字幕
-              </Button>
             )}
             <div className="flex flex-wrap gap-1.5 pb-2">
               <Button
