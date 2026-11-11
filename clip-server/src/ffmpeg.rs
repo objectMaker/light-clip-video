@@ -17,9 +17,26 @@ use serde_json::Value;
 
 pub type Progress = dyn Fn(i64, &str);
 
+/// Spawn a child process WITHOUT flashing a console window on Windows.
+///
+/// The Python original set `creationflags=CREATE_NO_WINDOW`. Without it, every
+/// ffprobe/ffmpeg call (initial probe, 8 thumbnails, 1 waveform, export steps)
+/// pops a black cmd window — which is exactly the "dozens of windows" flashing
+/// seen when loading a video.
+fn quiet(program: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 /// Run ffprobe and parse its JSON output.
 fn probe_json(ffprobe: &Path, args: &[&str]) -> Result<Value, String> {
-    let out = Command::new(ffprobe)
+    let out = quiet(ffprobe)
         .args(args)
         .stderr(Stdio::null())
         .output()
@@ -50,7 +67,7 @@ pub fn probe_encode_params(
 }
 
 pub fn list_keyframes(ffprobe: &Path, path: &str) -> Vec<i64> {
-    let out = Command::new(ffprobe)
+    let out = quiet(ffprobe)
         .args([
             "-v",
             "error",
@@ -121,7 +138,7 @@ fn run_ffmpeg_progress(
     seg_span: f64,
     on_progress: &Progress,
 ) -> Result<(), String> {
-    let mut cmd = Command::new(ffmpeg);
+    let mut cmd = quiet(ffmpeg);
     for a in &args[1..] {
         cmd.arg(a);
     }
@@ -346,7 +363,7 @@ pub fn execute_export(
 /// JPEG thumbnail at `seconds` (used by the timeline scrubber).
 pub fn thumb_jpeg(ffmpeg: &Path, path: &str, seconds: f64) -> Option<Vec<u8>> {
     let secs = seconds.max(0.0);
-    let out = Command::new(ffmpeg)
+    let out = quiet(ffmpeg)
         .args([
             "-y",
             "-v",
@@ -377,7 +394,7 @@ pub fn thumb_jpeg(ffmpeg: &Path, path: &str, seconds: f64) -> Option<Vec<u8>> {
 
 /// Waveform preview image.
 pub fn waveform_png(ffmpeg: &Path, path: &str) -> Option<Vec<u8>> {
-    let out = Command::new(ffmpeg)
+    let out = quiet(ffmpeg)
         .args([
             "-y",
             "-v",
