@@ -61,25 +61,32 @@ fn source_keyint(source: &Source) -> i64 {
 }
 
 /// H.264 profile names are tied to bit depth; a mismatch makes ffmpeg fail.
-fn compatible_profile(profile: &str, pix_fmt: &str) -> String {
+///
+/// Returns `None` when no `-profile:v` should be passed at all: the source
+/// has no profile, or the pixel format is 4:2:2 / 4:4:4 (x264 has no profile
+/// for those on 8-bit, and passing an empty profile makes ffmpeg fail with
+/// exit code -22 "invalid profile"). The profile name is normalised to
+/// lowercase first, because ffprobe / user input may capitalise it ("High").
+fn compatible_profile(profile: &str, pix_fmt: &str) -> Option<String> {
+    let profile = profile.trim().to_lowercase();
     if profile.is_empty() {
-        return String::new();
+        return None;
     }
     let ten_bit = pix_fmt.contains("10");
     if pix_fmt.contains("422") || pix_fmt.contains("444") {
-        return String::new();
+        return None;
     }
     if ten_bit {
-        return if ["baseline", "main", "high", "high10"].contains(&profile) {
-            "high10".to_string()
+        return if ["baseline", "main", "high", "high10"].contains(&profile.as_str()) {
+            Some("high10".to_string())
         } else {
-            String::new()
+            None
         };
     }
-    if ["high10", "high422", "high444"].contains(&profile) {
-        "high".to_string()
+    if ["high10", "high422", "high444"].contains(&profile.as_str()) {
+        Some("high".to_string())
     } else {
-        profile.to_string()
+        Some(profile)
     }
 }
 
@@ -201,7 +208,7 @@ pub fn build_export_plan(
                             "color_range" => v.color_range.clone(),
                             _ => None,
                         };
-                        if let Some(val) = val {
+                        if let Some(val) = val.filter(|s| !s.trim().is_empty()) {
                             resolved.insert(key.into(), val);
                         }
                     }
@@ -270,7 +277,21 @@ pub fn build_export_plan(
                 ("-color_range", "color_range"),
             ];
             if encoder == "libx264" {
-                resolved.insert("profile".into(), compatible_profile(resolved.get("profile").map(|s| s.as_str()).unwrap_or(""), resolved.get("pix_fmt").map(|s| s.as_str()).unwrap_or("")));
+                // Never pass an empty -profile:v to ffmpeg: compatible_profile
+                // returns None when no profile applies (no profile, 4:2:2 /
+                // 4:4:4, or an unsupported 10-bit profile) — drop the key
+                // instead of inserting "".
+                match compatible_profile(
+                    resolved.get("profile").map(|s| s.as_str()).unwrap_or(""),
+                    resolved.get("pix_fmt").map(|s| s.as_str()).unwrap_or(""),
+                ) {
+                    Some(p) => {
+                        resolved.insert("profile".into(), p);
+                    }
+                    None => {
+                        resolved.remove("profile");
+                    }
+                }
                 pairs = vec![
                     ("-profile:v", "profile"),
                     ("-level:v", "level"),
@@ -291,7 +312,12 @@ pub fn build_export_plan(
                 }
             }
             for (flag, key) in pairs {
+                // Never pass an empty option value to ffmpeg (e.g. an empty
+                // profile/level/pix_fmt/fps): ffmpeg rejects it with -22.
                 if let Some(val) = resolved.get(key) {
+                    if val.is_empty() {
+                        continue;
+                    }
                     video_options.push(flag.into());
                     video_options.push(val.clone());
                 }
@@ -605,5 +631,86 @@ mod tests {
         let bitrates = HashMap::new();
         let r = build_export_plan(&p, "out.mp4", "w", "ffmpeg", &infos, &bitrates);
         assert!(r.is_err());
+    }
+
+    fn info_with(profile: Option<&str>, pix_fmt: &str) -> EncodeParams {
+        let mut i = info();
+        i.video.profile = profile.map(|s| s.to_string());
+        i.video.pix_fmt = Some(pix_fmt.to_string());
+        i
+    }
+
+    fn plan_cmd(profile: Option<&str>, pix_fmt: &str) -> Vec<String> {
+        let p = project();
+        let mut infos = HashMap::new();
+        infos.insert("s1".into(), info_with(profile, pix_fmt));
+        let mut bitrates = HashMap::new();
+        bitrates.insert("s1".into(), (8_000_000i64, 192_000i64));
+        let plan = build_export_plan(&p, "D:/out/clip.mp4", "D:/tmp/work", "ffmpeg", &infos, &bitrates).unwrap();
+        assert_eq!(plan.segment_commands.len(), 1);
+        plan.segment_commands[0].clone()
+    }
+
+    fn assert_no_empty_args(cmd: &[String]) {
+        assert!(
+            !cmd.iter().any(|a| a.is_empty()),
+            "ffmpeg command must never contain an empty argument: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn compatible_profile_cases() {
+        assert_eq!(compatible_profile("", "yuv420p"), None);
+        assert_eq!(compatible_profile("high", "yuv422p"), None);
+        assert_eq!(compatible_profile("high422", "yuv422p"), None);
+        assert_eq!(compatible_profile("high444", "yuv444p"), None);
+        assert_eq!(compatible_profile("high", "yuv420p10le"), Some("high10".into()));
+        assert_eq!(compatible_profile("high422", "yuv420p10le"), None);
+        // ffprobe / user input may capitalise the profile name.
+        assert_eq!(compatible_profile("High", "yuv420p"), Some("high".into()));
+        assert_eq!(compatible_profile("HIGH", "yuv420p"), Some("high".into()));
+        assert_eq!(compatible_profile("high", "yuv420p"), Some("high".into()));
+    }
+
+    #[test]
+    fn yuv422p_export_omits_profile_flag() {
+        // Regression test for the reported -22 failure: a yuv422p source
+        // (profile "High 4:2:2") used to produce `-profile:v ""`.
+        let cmd = plan_cmd(Some("high422"), "yuv422p");
+        assert_no_empty_args(&cmd);
+        assert!(!cmd.contains(&"-profile:v".to_string()), "422 must not pass -profile:v: {cmd:?}");
+    }
+
+    #[test]
+    fn empty_profile_export_omits_profile_flag() {
+        // A source with no profile (ffprobe reports none) must not pass
+        // `-profile:v ""` either.
+        let cmd = plan_cmd(None, "yuv420p");
+        assert_no_empty_args(&cmd);
+        assert!(!cmd.contains(&"-profile:v".to_string()), "empty profile must not pass -profile:v: {cmd:?}");
+    }
+
+    #[test]
+    fn capitalised_profile_is_lowercased() {
+        let cmd = plan_cmd(Some("High"), "yuv420p");
+        assert_no_empty_args(&cmd);
+        let pos = cmd.iter().position(|a| a == "-profile:v").expect("profile flag expected");
+        assert_eq!(cmd[pos + 1], "high");
+    }
+
+    #[test]
+    fn ten_bit_export_uses_high10() {
+        let cmd = plan_cmd(Some("high"), "yuv420p10le");
+        assert_no_empty_args(&cmd);
+        let pos = cmd.iter().position(|a| a == "-profile:v").expect("profile flag expected");
+        assert_eq!(cmd[pos + 1], "high10");
+    }
+
+    #[test]
+    fn normal_yuv420p_high_keeps_profile() {
+        let cmd = plan_cmd(Some("high"), "yuv420p");
+        assert_no_empty_args(&cmd);
+        let pos = cmd.iter().position(|a| a == "-profile:v").expect("profile flag expected");
+        assert_eq!(cmd[pos + 1], "high");
     }
 }

@@ -66,6 +66,66 @@ pub fn probe_encode_params(
     Ok(clip_core::probe::parse_encode_params(&json))
 }
 
+/// List the subtitle streams embedded in a video file.
+pub fn probe_subtitle_streams(
+    ffprobe: &Path,
+    path: &str,
+) -> Result<Vec<clip_core::probe::SubtitleStreamInfo>, String> {
+    let json = probe_json(
+        ffprobe,
+        &["-v", "error", "-show_streams", "-of", "json", path],
+    )?;
+    Ok(clip_core::probe::parse_subtitle_streams(&json))
+}
+
+/// Extract one embedded text subtitle stream to an SRT file.
+///
+/// `stream_index` is the ffprobe stream index (ffmpeg `-map 0:<index>`).
+/// Bitmap subtitle codecs (DVD/PGS/DVB) carry pictures, not text, and cannot
+/// be converted to SRT — that is rejected here with a plain-language error.
+pub fn extract_subtitle(
+    ffmpeg: &Path,
+    path: &str,
+    stream_index: i64,
+    codec_name: &str,
+    out_path: &Path,
+) -> Result<(), String> {
+    if !clip_core::probe::subtitle_codec_is_text(codec_name) {
+        return Err(format!(
+            "该内嵌字幕是图片字幕（{codec_name}），无法提取为文本 SRT；请使用外挂 .srt 字幕"
+        ));
+    }
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("无法创建目录: {e}"))?;
+    }
+    let out = quiet(ffmpeg)
+        .args([
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            path,
+            "-map",
+            &format!("0:{stream_index}"),
+            "-c:s",
+            "srt",
+            &out_path.to_string_lossy(),
+        ])
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("无法运行 ffmpeg: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "提取内嵌字幕失败: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    if !out_path.is_file() {
+        return Err("提取内嵌字幕失败：没有生成字幕文件".to_string());
+    }
+    Ok(())
+}
+
 pub fn list_keyframes(ffprobe: &Path, path: &str) -> Vec<i64> {
     let out = quiet(ffprobe)
         .args([

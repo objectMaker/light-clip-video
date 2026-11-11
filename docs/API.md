@@ -60,6 +60,7 @@
 | `/api/profiles` | — | `{profiles:[...], ...}`：三档方案目录（标签、人话摘要、原始命令） |
 | `/api/export/default` | `dir`,`name`,`overwrite`(`1`/`true`) | 导出目标映射（见下） |
 | `/api/encode-params` | `path` | `{video:{codec,supported,profile,level,pix_fmt,fps,fps_float,width,height,video_kbps,b_frames,color_*}, audio:{...}, format:{duration_ms,size_bytes,bitrate_kbps}}`；未登记媒体返回 403 |
+| `/api/subtitles/embedded` | `path` | `{streams:[{index, codec, language, title, text}]}`：视频内嵌字幕流；`text=false` 为图片字幕（DVD/PGS/DVB），无法提取；未登记媒体返回 403 |
 | `/api/export/status` | `id` | `{status, percent, message, result, error}` |
 | `/api/media` | `path` | 视频流（支持 `Range`，返回 200/206）；未登记返回 403 |
 | `/api/thumb` | `path`,`t`(秒) | JPEG 缩略图 |
@@ -92,7 +93,16 @@
   "auto_subtitles": true }
 ```
 - `videos` 与 `video` 二选一；`subtitles` 为空且 `auto_subtitles=true` 时，自动在视频同目录找 `片名.srt`/`.vtt` 及 `片名.语言.srt`。
-- 返回 `{project, state}`。
+- 返回 `{project, state, embedded_subtitles:[{source_id, index, codec, language, title, text}]}`：各视频的内嵌字幕流（见 `GET /api/subtitles/embedded`）。
+
+### `POST /api/subtitles/extract`
+提取一条内嵌字幕流为 SRT，并注册为可用字幕轨（`origin:"embedded"`），可直接用于选点剪辑、预览与导出。
+```json
+{ "path": "D:/v/sample.mkv", "stream_index": 3, "source_id": "s1" }
+```
+- 只支持文本字幕（subrip/ass/mov_text 等）；图片字幕返回错误，请用外挂 `.srt`。
+- 提取出的 SRT 存在 `<autosave>/extracted/<片名>_<stream_index>.srt`；源视频不改动；同一流重复提取返回已有的轨（`reused:true`）。
+- 返回 `{project, state, track_id, path, reused}`。
 
 ### `POST /api/project`
 用前端传来的完整工程覆盖服务端状态并写快照。

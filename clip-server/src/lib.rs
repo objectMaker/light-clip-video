@@ -494,9 +494,26 @@ fn open_media(body: &Value, state: &Arc<State>, cfg: &ServerConfig) -> Result<Va
     }
 
     let st = preview_state(&project).map_err(|e| e.to_string())?;
+    // Embedded subtitle streams in each video, so the UI can offer to
+    // extract (separate) them as usable subtitle tracks for clipping.
+    let mut embedded: Vec<Value> = Vec::new();
+    for source in &project.sources {
+        if let Ok(streams) = ffmpeg::probe_subtitle_streams(&cfg.ffprobe_bin, &source.path) {
+            for s in streams {
+                embedded.push(json!({
+                    "source_id": source.id,
+                    "index": s.index,
+                    "codec": s.codec_name,
+                    "language": s.language,
+                    "title": s.title,
+                    "text": s.codec_name.as_deref().map(clip_core::probe::subtitle_codec_is_text).unwrap_or(false),
+                }));
+            }
+        }
+    }
     *state.project.lock().unwrap() = project.clone();
     save_project_disk(&project, &cfg.autosave_dir);
-    Ok(json!({ "project": project, "state": st }))
+    Ok(json!({ "project": project, "state": st, "embedded_subtitles": embedded }))
 }
 
 fn apply_cue_edit(body: &Value, state: &Arc<State>, cfg: &ServerConfig) -> Result<Value, String> {
@@ -711,6 +728,90 @@ fn export_subtitles(body: &Value, project: &Project) -> Result<Value, String> {
         "remapped": !project.clips.is_empty(),
         "default_path": target["default_path"],
     }))
+}
+
+/// Extract one embedded subtitle stream from a registered video and register
+/// it as a usable subtitle track (origin "embedded"). The extracted SRT is
+/// stored under `<autosave>/extracted/` so it survives restarts; the source
+/// video is never modified. If the same stream was already extracted, the
+/// existing track is returned instead of duplicating it.
+fn extract_embedded_subtitle(body: &Value, state: &Arc<State>, cfg: &Arc<ServerConfig>) -> Result<Value, String> {
+    let mut project = state.project.lock().unwrap().clone();
+    let raw_path = body.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let path = clean_abs(raw_path);
+    let stream_index = body.get("stream_index").and_then(|v| v.as_i64()).unwrap_or(-1);
+    if stream_index < 0 {
+        return Err("请指定要提取的内嵌字幕流".into());
+    }
+    let source = project
+        .sources
+        .iter()
+        .find(|s| s.path == path)
+        .or_else(|| {
+            body.get("source_id")
+                .and_then(|v| v.as_str())
+                .and_then(|id| project.sources.iter().find(|s| s.id == id))
+        })
+        .cloned()
+        .ok_or_else(|| "未登记的媒体文件".to_string())?;
+    let streams = ffmpeg::probe_subtitle_streams(&cfg.ffprobe_bin, &source.path)?;
+    let stream = streams
+        .iter()
+        .find(|s| s.index == stream_index)
+        .ok_or_else(|| format!("视频里没有编号为 {stream_index} 的内嵌字幕流"))?;
+    let codec = stream.codec_name.clone().unwrap_or_default();
+    let lang = stream.language.clone().unwrap_or_default();
+    let title = stream.title.clone().unwrap_or_default();
+    let stem = Path::new(&source.path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "video".to_string());
+    let out_path = cfg
+        .autosave_dir
+        .join("extracted")
+        .join(format!("{stem}_{stream_index}.srt"));
+    let out_str = out_path.to_string_lossy().to_string();
+    if let Some(existing) = project.tracks.iter().find(|t| t.path.as_deref() == Some(out_str.as_str())) {
+        let track_id = existing.id.clone();
+        let st = preview_state(&project).map_err(|e| e.to_string())?;
+        return Ok(json!({ "project": project, "state": st, "track_id": track_id, "path": out_str, "reused": true }));
+    }
+    ffmpeg::extract_subtitle(&cfg.ffmpeg_bin, &source.path, stream_index, &codec, &out_path)?;
+    let cues = read_srt_file(&out_str).map_err(|e| e.to_string())?;
+    if cues.is_empty() {
+        return Err("该内嵌字幕没有可提取的字幕内容".into());
+    }
+    let next_id = project
+        .tracks
+        .iter()
+        .filter_map(|t| t.id.strip_prefix('t').and_then(|n| n.parse::<i64>().ok()))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let group = if lang.is_empty() { "embedded".to_string() } else { lang.clone() };
+    let label = if !title.is_empty() {
+        title.clone()
+    } else if !lang.is_empty() {
+        format!("内嵌字幕 · {lang}")
+    } else {
+        format!("内嵌字幕 #{stream_index}")
+    };
+    let track_id = format!("t{next_id}");
+    project.tracks.push(SubTrack {
+        id: track_id.clone(),
+        source_id: source.id.clone(),
+        group_id: group,
+        label,
+        lang,
+        path: Some(out_str.clone()),
+        origin: "embedded".into(),
+        cues,
+        enabled: true,
+    });
+    let st = preview_state(&project).map_err(|e| e.to_string())?;
+    *state.project.lock().unwrap() = project.clone();
+    save_project_disk(&project, &cfg.autosave_dir);
+    Ok(json!({ "project": project, "state": st, "track_id": track_id, "path": out_str, "reused": false }))
 }
 
 fn reveal_path(path: &str, dry_run: bool) -> Result<Value, String> {
@@ -1142,6 +1243,30 @@ fn route_get(req: Request, route: &str, q: &HashMap<String, String>, state: &Arc
                 Err(e) => respond_err(req, &e, 500),
             }
         }
+        "/api/subtitles/embedded" => {
+            let path = get("path");
+            let project = state.project.lock().unwrap().clone();
+            if path.is_empty() || !allowed_media(&project, path) || !Path::new(path).is_file() {
+                respond_err(req, "未登记的媒体文件", 403);
+                return;
+            }
+            match ffmpeg::probe_subtitle_streams(&cfg.ffprobe_bin, path) {
+                Ok(streams) => respond_json(
+                    req,
+                    &json!({
+                        "streams": streams.iter().map(|s| json!({
+                            "index": s.index,
+                            "codec": s.codec_name,
+                            "language": s.language,
+                            "title": s.title,
+                            "text": s.codec_name.as_deref().map(clip_core::probe::subtitle_codec_is_text).unwrap_or(false),
+                        })).collect::<Vec<_>>(),
+                    }),
+                    200,
+                ),
+                Err(e) => respond_err(req, &e, 500),
+            }
+        }
         "/api/export/status" => {
             let id = get("id");
             let tasks = state.tasks.lock().unwrap();
@@ -1195,6 +1320,10 @@ fn route_get(req: Request, route: &str, q: &HashMap<String, String>, state: &Arc
                 None => respond_err(req, "waveform failed", 500),
             }
         }
+        // No favicon is shipped; answer 204 so browsers don't log a 404.
+        "/favicon.ico" => {
+            let _ = req.respond(Response::empty(204));
+        }
         _ => respond_err(req, &format!("未知路由 {route}"), 404),
     }
 }
@@ -1233,6 +1362,10 @@ fn route_post(mut req: Request, route: &str, state: &Arc<State>, cfg: &Arc<Serve
                 Err(e) => respond_err(req, &e, 500),
             }
         }
+        "/api/subtitles/extract" => match extract_embedded_subtitle(&body, state, cfg) {
+            Ok(v) => respond_json(req, &v, 200),
+            Err(e) => respond_err(req, &e, 500),
+        },
         "/api/project/load" => {
             let project: Option<Project> = body
                 .get("project")

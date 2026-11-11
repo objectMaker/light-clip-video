@@ -200,6 +200,48 @@ pub fn parse_encode_params(value: &Value) -> EncodeParams {
     }
 }
 
+/// One subtitle stream embedded in a video file (MKV/MP4/MOV …). `index` is
+/// the ffprobe stream index, used as the ffmpeg `-map 0:<index>` selector.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SubtitleStreamInfo {
+    pub index: i64,
+    pub codec_name: Option<String>,
+    pub language: Option<String>,
+    pub title: Option<String>,
+}
+
+/// Text subtitle codecs that ffmpeg can convert to SRT. Bitmap subtitles
+/// (DVD/PGS/DVB) carry pictures, not text, and cannot be extracted as SRT.
+pub fn subtitle_codec_is_text(codec: &str) -> bool {
+    matches!(
+        codec.to_lowercase().as_str(),
+        "subrip" | "srt" | "ass" | "ssa" | "mov_text" | "text" | "webvtt" | "vtt" | "smi" | "microdvd" | "subviewer" | "jacosub"
+    )
+}
+
+/// List the subtitle streams in an ffprobe JSON dump.
+pub fn parse_subtitle_streams(value: &Value) -> Vec<SubtitleStreamInfo> {
+    let streams = value
+        .get("streams")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    streams
+        .iter()
+        .filter(|s| s.get("codec_type").and_then(clean_str).as_deref() == Some("subtitle"))
+        .map(|s| {
+            let tags = s.get("tags").cloned().unwrap_or(Value::Null);
+            SubtitleStreamInfo {
+                index: as_i64(&s["index"]).unwrap_or(-1),
+                codec_name: clean_str(&s["codec_name"]),
+                language: clean_str(&tags["language"]),
+                title: clean_str(&tags["title"]),
+            }
+        })
+        .filter(|s| s.index >= 0)
+        .collect()
+}
+
 /// Build a [`Source`] from ffprobe JSON.
 pub fn parse_source(value: &Value, source_id: Option<&str>, path: &str) -> Source {
     let fmt = value.get("format").cloned().unwrap_or(Value::Null);
@@ -308,5 +350,38 @@ mod tests {
         assert!((s.fps - 25.0).abs() < 0.01);
         let p = parse_encode_params(&v);
         assert_eq!(p.format.duration_ms, 3000);
+    }
+
+    #[test]
+    fn parse_subtitle_streams_lists_embedded() {
+        let v = json!({
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {"index": 1, "codec_type": "audio", "codec_name": "aac"},
+                {"index": 2, "codec_type": "subtitle", "codec_name": "subrip",
+                 "tags": {"language": "chi", "title": "中文"}},
+                {"index": 3, "codec_type": "subtitle", "codec_name": "ass",
+                 "tags": {"language": "eng"}},
+                {"index": 4, "codec_type": "subtitle", "codec_name": "hdmv_pgs_subtitle",
+                 "tags": {"language": "jpn"}}
+            ]
+        });
+        let subs = parse_subtitle_streams(&v);
+        assert_eq!(subs.len(), 3);
+        assert_eq!(subs[0].index, 2);
+        assert_eq!(subs[0].codec_name.as_deref(), Some("subrip"));
+        assert_eq!(subs[0].language.as_deref(), Some("chi"));
+        assert_eq!(subs[0].title.as_deref(), Some("中文"));
+        assert_eq!(subs[1].codec_name.as_deref(), Some("ass"));
+        assert!(subtitle_codec_is_text("subrip"));
+        assert!(subtitle_codec_is_text("mov_text"));
+        assert!(!subtitle_codec_is_text("hdmv_pgs_subtitle"));
+        assert!(!subtitle_codec_is_text("dvdsub"));
+    }
+
+    #[test]
+    fn parse_subtitle_streams_empty_when_none() {
+        let v = json!({"streams": [{"index": 0, "codec_type": "video", "codec_name": "h264"}]});
+        assert!(parse_subtitle_streams(&v).is_empty());
     }
 }

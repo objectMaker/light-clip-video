@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -13,6 +14,15 @@ export function CuesPanel({ app }: { app: AppApi }) {
   const track = app.currentTrack
   const needle = app.cueSearch.trim().toLowerCase()
   const indices = app.visibleCueIndices()
+  // Embedded subtitle streams of the current video that have not been
+  // extracted yet as a usable track.
+  const embeddedForSource = (app.embeddedSubs || []).filter((s) => s.source_id === app.activeSource)
+  // The list comes from /api/open, so after a reload / project restore it
+  // is empty: probe the current video once so the embedded section shows.
+  useEffect(() => {
+    if (app.activeSource && embeddedForSource.length === 0) void app.refreshEmbedded()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.activeSource])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -23,7 +33,8 @@ export function CuesPanel({ app }: { app: AppApi }) {
         </TabsList>
 
         {app.cueSub === 'pick' && (
-          <div className="flex min-h-0 flex-1 flex-col pt-2">
+          <div className="flex shrink-0 flex-col pt-2">
+            <div className="pb-2 text-xs text-muted-foreground">剪辑用字幕轨：下方「由勾选行生成片段」等操作使用这里选中的字幕轨。</div>
             <div className="flex items-center gap-2 pb-2">
               <div className="relative flex-1">
                 <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
@@ -36,17 +47,48 @@ export function CuesPanel({ app }: { app: AppApi }) {
               </div>
               <Select value={app.cueTrack || ''} onValueChange={(v) => { app.setCueTrack(v); app.setChecked(new Set()) }}>
                 <SelectTrigger className="h-8 w-[150px] text-xs">
-                  <SelectValue placeholder="字幕轨" />
+                  <SelectValue placeholder="剪辑用字幕轨" />
                 </SelectTrigger>
                 <SelectContent>
                   {(app.project?.tracks || []).map((t) => (
                     <SelectItem key={t.id} value={t.id}>
-                      {t.label || t.group_id} · {t.cues.length} 条
+                      {t.label || t.group_id} · {t.cues.length} 条{t.origin === 'embedded' ? '（内嵌）' : t.origin === 'external' ? '（外挂）' : ''}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Embedded subtitle streams in the current video: extract
+                (separate) one to an SRT track, then use it for clipping
+                like any other track. */}
+            {embeddedForSource.length > 0 && (
+              <div className="mb-2 rounded-md border p-2.5">
+                <div className="mb-1.5 text-xs font-medium">内嵌字幕（视频自带）</div>
+                <div className="space-y-1.5">
+                  {embeddedForSource.map((s) => (
+                    <div key={s.index} className="flex items-center gap-2 text-xs">
+                      <span className="min-w-0 flex-1 truncate">
+                        {s.title || s.language || `字幕流 #${s.index}`} · {s.codec || '未知编码'}
+                        {s.language ? ` · ${s.language}` : ''}
+                      </span>
+                      {s.text ? (
+                        <Button size="sm" variant="outline" className="h-6 shrink-0 text-xs" onClick={() => void app.extractEmbedded(s)}>
+                          提取并使用
+                        </Button>
+                      ) : (
+                        <span className="shrink-0 text-muted-foreground">图片字幕，无法提取</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {embeddedForSource.length === 0 && app.currentSource && (
+              <Button size="sm" variant="outline" className="mb-2 h-7 self-start text-xs" onClick={() => void app.refreshEmbedded()}>
+                检测视频内嵌字幕
+              </Button>
+            )}
             <div className="flex flex-wrap gap-1.5 pb-2">
               <Button
                 variant="outline"

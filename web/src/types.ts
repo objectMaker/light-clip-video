@@ -135,6 +135,19 @@ export interface PreviewState {
 export interface ProjectAndState {
   project: Project
   state: PreviewState
+  embedded_subtitles?: EmbeddedSubtitle[]
+}
+
+/// One subtitle stream embedded in a video file (from /api/open or
+/// /api/subtitles/embedded). `text` is false for bitmap subtitles
+/// (DVD/PGS/DVB), which cannot be extracted to SRT.
+export interface EmbeddedSubtitle {
+  source_id: string
+  index: number
+  codec?: string | null
+  language?: string | null
+  title?: string | null
+  text: boolean
 }
 
 export interface SrcInfo {

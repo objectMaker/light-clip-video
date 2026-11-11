@@ -80,7 +80,17 @@ export function Player({ app }: { app: AppApi }) {
         </span>
         <div className="flex-1" />
         <Badge variant="secondary">{badgeText}</Badge>
-        <Select value={app.activeGroup || ''} onValueChange={(v) => app.setActiveGroup(v)}>
+        <Select
+          value={app.activeGroup || ''}
+          onValueChange={(v) => {
+            app.setActiveGroup(v)
+            // The overlay group and the clip track stay in sync: picking a
+            // group here also makes that group's track the one used for
+            // clip generation in the Subtitles tab.
+            const t = (app.project?.tracks || []).find((tr) => tr.group_id === v && tr.source_id === app.activeSource)
+            if (t) app.setCueTrack(t.id)
+          }}
+        >
           <SelectTrigger className="h-8 w-[110px] text-xs">
             <SelectValue placeholder="字幕轨" />
           </SelectTrigger>

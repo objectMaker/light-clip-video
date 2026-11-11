@@ -316,7 +316,7 @@ export function Timeline({ app }: { app: AppApi }) {
                 <div
                   key={s.clip_id}
                   data-i={i}
-                  className={`tl-clip absolute bottom-0 top-0 z-[3] min-w-[5px] cursor-grab border-x-2 border-blue-700 bg-blue-600/20 hover:bg-blue-600/30 ${
+                  className={`tl-clip pointer-events-auto absolute bottom-0 top-0 z-[3] min-w-[5px] cursor-grab border-x-2 border-blue-700 bg-blue-600/20 hover:bg-blue-600/30 ${
                     app.selectedClip === i ? 'bg-blue-600/40 shadow-[inset_0_0_0_2px_hsl(var(--primary))]' : ''
                   }`}
                   style={{ left: `${left}%`, width: `${width}%` }}

@@ -3,6 +3,7 @@
 import type {
   BrowseEntry,
   CueShiftResult,
+  EmbeddedSubtitle,
   EncodeCfg,
   EncodeEvaluation,
   ExportStatus,
@@ -44,6 +45,10 @@ export const apiClient = {
   preview: (project: Project) => post<{ state: ProjectAndState['state'] }>('/api/preview', { project }),
   open: (videos: string[], subtitles: { path: string; source_id: string; group_id: string; label: string; lang: string }[], auto_subtitles: boolean) =>
     post<ProjectAndState>('/api/open', { videos, subtitles, auto_subtitles }),
+  embeddedSubtitles: (path: string) =>
+    api<{ streams: EmbeddedSubtitle[] }>(`/api/subtitles/embedded?${q({ path })}`),
+  extractSubtitle: (body: { path: string; stream_index: number; source_id: string }) =>
+    post<ProjectAndState & { track_id: string; path: string; reused: boolean }>('/api/subtitles/extract', body),
   browse: (dir: string, kind: 'all' | 'video' | 'sub' | 'dir') =>
     api<{ path: string; parent: string; entries: BrowseEntry[] }>(`/api/browse?${q({ dir, kind })}`),
   encodeParams: (path: string) => api<SrcInfo>(`/api/encode-params?${q({ path })}`),

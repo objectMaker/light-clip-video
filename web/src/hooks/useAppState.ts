@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { apiClient, mediaUrl } from '../api'
 import type {
+  EmbeddedSubtitle,
   EncodeCfg,
   EncodeEvaluation,
   ExportTarget,
@@ -98,6 +99,9 @@ export function useAppState() {
   const [cueSearch, setCueSearch] = useState('')
   const [padStart, setPadStart] = useState(200)
   const [padEnd, setPadEnd] = useState(300)
+  // Embedded subtitle streams found in the opened videos (from /api/open);
+  // entries are removed once extracted as a track.
+  const [embeddedSubs, setEmbeddedSubs] = useState<EmbeddedSubtitle[]>([])
   const [wbStep, setWbStep] = useState(100)
   const [wbTrackDelta, setWbTrackDelta] = useState(0)
   const [wbStartText, setWbStartText] = useState('')
@@ -129,6 +133,7 @@ export function useAppState() {
   const checkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const outPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingExportRef = useRef<(() => void) | null>(null)
+  const runExportRef = useRef<() => Promise<void>>(async () => {})
   const outDirRef = useRef(outDir)
   const outNameRef = useRef(outName)
   const overwriteRef = useRef(overwrite)
@@ -1078,13 +1083,53 @@ export function useAppState() {
       notify('请先打开视频')
       return
     }
+    // No clips selected = the user wants a whole-film export (e.g. just to
+    // change the quality). Confirm first, then build 0 -> full-length clips
+    // for every source (same as the 整片 button) and export those.
     if (!p?.clips?.length) {
+      setConfirmReq({
+        title: '您目前没有选中片段，是否确认全量导出？',
+        description: '将按每个源片 0 → 全长导出整片，不做剪辑。',
+        confirmLabel: '确认导出',
+        onConfirm: () => {
+          const cur = projectRef.current
+          if (!cur) return
+          const clips = makeWholeClips(cur.sources)
+          if (!clips.length) {
+            notify('没有探测到可用的视频时长')
+            return
+          }
+          updateProject((proj) => ({ ...proj, clips }))
+          setSelectedClip(null)
+          setChecked(new Set())
+          setStatus(`已按 ${clips.length} 个源片铺满全长（0 → 片尾），开始全量导出`)
+          // Sync first so the server state (and totalMs) reflects the
+          // whole-film clips, then run the export.
+          void (async () => {
+            await syncProject(true)
+            void runExportRef.current()
+          })()
+        },
+      })
+      return
+    }
+    void runExportRef.current()
+  }, [notify, syncProject, updateProject])
+
+  // The export itself, after clips are known to exist (either selected by the
+  // user, or whole-film clips built by the no-clip confirm above).
+  const runExport = useCallback(async () => {
+    const p = projectRef.current
+    if (!p?.sources?.length || !p?.clips?.length) {
       notify('请先添加至少一个片段')
       return
     }
     const enc = syncOutputFromEncode()
-    if (!enc) return
-    const output = {
+    if (!enc) {
+      notify('编码参数尚未就绪')
+      return
+    }
+    const output: Project['output'] = {
       ...p.output,
       mode: modeRef.current,
       crf: enc.crf,
@@ -1145,6 +1190,8 @@ export function useAppState() {
       warnings: warns,
     })
   }, [embedSubs, lastCheck, pollExport, presetSpeed, snapToCue, snapTol, syncOutputFromEncode, totalMs, notify])
+
+  runExportRef.current = runExport
 
   const confirmExportGo = useCallback(() => {
     const fn = pendingExportRef.current
@@ -1303,13 +1350,76 @@ export function useAppState() {
         applyProject(res.project, res.state)
         setOpenDialog(false)
         const trackCount = res.project.tracks?.length || 0
+        const embedded = (res.embedded_subtitles || []).filter((e) => {
+          // Don't re-list a stream already extracted as a track.
+          const m = (res.project.tracks || []).some(
+            (t) => t.origin === 'embedded' && t.source_id === e.source_id && /_(\d+)\.srt$/.exec(t.path || '')?.[1] === String(e.index),
+          )
+          return !m
+        })
+        setEmbeddedSubs(embedded)
         setStatus(
           `已载入 ${videos.length} 个视频、${trackCount} 条字幕轨` +
+            (embedded.length ? ` · 发现 ${embedded.length} 条内嵌字幕（在「字幕」页可提取分离）` : '') +
             (trackCount ? '' : '（未载入字幕：整片压缩时把原 .srt 改名即可复用）'),
         )
       } catch (e) {
         notify('载入失败: ' + (e as Error).message)
         setStatus('载入失败')
+      }
+    },
+    [applyProject, notify],
+  )
+
+  // Re-probe the current video for embedded subtitle streams (e.g. after a
+  // project was restored from disk, where /api/open did not run). Streams
+  // already extracted as tracks are not listed again.
+  const refreshEmbedded = useCallback(async () => {
+    const src = currentSource
+    if (!src) return
+    try {
+      const res = await apiClient.embeddedSubtitles(src.path)
+      const extractedIdx = new Set(
+        (projectRef.current?.tracks || [])
+          .filter((t) => t.origin === 'embedded' && t.source_id === src.id)
+          .map((t) => {
+            const m = /_(\d+)\.srt$/.exec(t.path || '')
+            return m ? Number(m[1]) : -1
+          }),
+      )
+      const streams = (res.streams || [])
+        .filter((s) => !extractedIdx.has(s.index))
+        .map((s) => ({ ...s, source_id: src.id }))
+      setEmbeddedSubs((prev) => [...prev.filter((e) => e.source_id !== src.id), ...streams])
+    } catch (e) {
+      setStatus('检测内嵌字幕失败: ' + (e as Error).message)
+    }
+  }, [currentSource])
+
+  // Extract (separate) one embedded subtitle stream and make it the
+  // subtitle track used for clipping: the new track is selected in the
+  // Subtitles tab and in the player overlay.
+  const extractEmbedded = useCallback(
+    async (stream: EmbeddedSubtitle) => {
+      const src = (projectRef.current?.sources || []).find((s) => s.id === stream.source_id)
+      if (!src) {
+        notify('找不到该内嵌字幕对应的视频')
+        return
+      }
+      setStatus('正在提取内嵌字幕…')
+      try {
+        const res = await apiClient.extractSubtitle({ path: src.path, stream_index: stream.index, source_id: src.id })
+        applyProject(res.project, res.state)
+        setEmbeddedSubs((prev) => prev.filter((e) => !(e.source_id === stream.source_id && e.index === stream.index)))
+        setCueTrack(res.track_id)
+        const track = res.project.tracks.find((t) => t.id === res.track_id)
+        if (track) setActiveGroup(track.group_id)
+        setTab('cues')
+        setCueSub('pick')
+        setStatus(res.reused ? '该内嵌字幕已提取过，已切换到这条字幕轨' : `已提取内嵌字幕「${track?.label || ''}」，可用它选点剪辑`)
+      } catch (e) {
+        notify('提取内嵌字幕失败: ' + (e as Error).message)
+        setStatus('提取内嵌字幕失败')
       }
     },
     [applyProject, notify],
@@ -1441,6 +1551,7 @@ export function useAppState() {
     setProfileMode: setProfileModeFull, applyBuiltinAsCustom, applyPresetValues,
     shrinkPreset, resetEncode, saveProjectFile, loadProjectPayload, loadProjectFile,
     loadRecentItem, loadSelected, init,
+    embeddedSubs, refreshEmbedded, extractEmbedded,
     readRecent, saveRecent, updateEncode, updateOutput,
     ZOOM_STEPS,
     countEncodeChanges,

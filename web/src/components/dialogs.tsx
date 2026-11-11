@@ -664,6 +664,7 @@ export function OpenMediaDialog({ app }: { app: AppApi }) {
               自动匹配同名同目录字幕（.srt / .vtt，含 <span className="font-mono">片名.语言.srt</span> 多语言）
             </label>
             <div className="text-xs text-muted-foreground">已选字幕（可多选；留空则只载入视频）</div>
+            <div className="text-xs text-muted-foreground">视频自带的内嵌字幕不用在这里选：载入后在「字幕」页可提取分离，提取后即可用来选点剪辑。</div>
             <ScrollArea className="max-h-[130px] rounded-lg border">
               {!subs.length ? (
                 <div className="p-4 text-center text-xs text-muted-foreground">没有手动选字幕（留空时会自动匹配同名 .srt / .vtt）</div>
