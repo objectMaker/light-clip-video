@@ -2,7 +2,18 @@
 
 ## 环境准备
 
-### 方案 A：GNU + MinGW（本仓库开发环境，无需管理员权限）
+### 方案 A：MSVC（当前默认，Windows 构建用它）
+
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-msvc
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+- 安装 MSVC Build Tools 2022（含 C++ 工作负载与 Windows 10 SDK），或完整 Visual Studio。
+- 确保 `~/.cargo/config.toml` 里**没有** `[target.x86_64-pc-windows-gnu]` 的 linker 配置（有就删掉），否则会按 GNU 链接。
+- 构建产物在 `target\release\light-clip-video.exe`；ffmpeg/ffprobe 打包进 `src-tauri\bin\`（见「打包发布」）。
+
+### 方案 B：GNU + MinGW（无管理员权限时的备选）
 
 ```powershell
 rustup toolchain install stable-x86_64-pc-windows-gnu
@@ -15,11 +26,7 @@ rustup default stable-x86_64-pc-windows-gnu
   [target.x86_64-pc-windows-gnu]
   linker = "C:\\mingw64\\bin\\x86_64-w64-mingw32-gcc.exe"
   ```
-- 为什么不用 MSVC：MSVC Build Tools 需要管理员权限；GNU 工具链在普通用户下即可编译链接。Tauri 2 在 `x86_64-pc-windows-gnu` 上可以正常构建（`tao` / `webview2-com` 都通过）。
-
-### 方案 B：MSVC（如果你已装 Visual Studio C++ Build Tools）
-
-用默认的 `stable-x86_64-pc-windows-msvc` 工具链即可，删除上面 `[target.x86_64-pc-windows-gnu]` 配置。其余步骤相同。
+- Tauri 2 在 `x86_64-pc-windows-gnu` 上可以正常构建（`tao` / `webview2-com` 都通过）。两种工具链构建结果一致；日常开发用方案 A 即可。
 
 ### 其它依赖
 
@@ -30,7 +37,7 @@ rustup default stable-x86_64-pc-windows-gnu
 
 ```cmd
 cargo run -p light-clip-video                 :: 打开桌面窗口（开发）
-cargo test -p clip-core                       :: 领域逻辑单测（35+ 项）
+cargo test -p clip-core                       :: 领域逻辑单测（43 项）
 cargo run -p clip-server --example serve -- 8765   :: 只起 HTTP 服务，浏览器调试（先 npm run build，前端在 web/dist/）
 cd web && npm run build                       :: 前端构建（TypeScript + Vite）
 cd web && npm run dev                         :: 前端开发服务（代理 /api 到 8765）

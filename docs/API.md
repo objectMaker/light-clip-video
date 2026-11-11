@@ -51,8 +51,8 @@
 
 | 路径 | 参数 | 返回 |
 | --- | --- | --- |
-| `/`、`/index.html` | — | 前端页面 |
-| `/app.js`、`/style.css` | — | 静态资源 |
+| `/`、`/index.html` | — | 前端页面（React 构建产物 `web/dist/`） |
+| `/assets/*` 等静态文件 | — | Vite 构建产物（JS / CSS / 图标），由内嵌服务直接提供 |
 | `/api/project` | — | `{project, state}` |
 | `/api/project/recover` | — | 磁盘快照 `{project, state, saved_at, file}`，没有则 `{project:null}` |
 | `/api/browse` | `dir`,`kind`(`all`/`video`/`sub`/`dir`) | `{path, parent, entries:[{name,path,is_dir,size}]}`；`dir` 空时列盘符 |

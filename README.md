@@ -15,10 +15,13 @@
 - **字幕时间校准工作台**：单句循环、迷你时间条拖拽、逐句 ± 微调、整轨偏移；源 `.srt` **只读**，改动立即生效
 - **自动字幕重映射**：剪辑后字幕按同一 `[in,out]` 平移，预览与导出完全一致
 - **两种导出模式**
-  - 精确模式：帧级准确，回填原片位深 / profile / level / 色彩标签 / GOP / B 帧 / 音频参数
+  - 精确模式：帧级准确，回填原片位深 / profile / level / 色彩标签 / GOP / B 帧 / 音频参数；空的或与位深不匹配的 profile 不会传给 ffmpeg（不传就用编码器默认，避免 `invalid profile` 导出失败）
   - 无损模式：`-c copy` 流拷贝，画质逐字节一致，起点吸附关键帧
 - **三档转码方案**：沿用原片 / 720p 省体积 / 自定义（含实时警告与体积预估）
 - **自动匹配字幕**：同目录同名 `.srt` / `.vtt`，以及 `片名.语言.srt` 多语言文件
+- **选字幕轨剪辑**：字幕页的「剪辑用字幕轨」决定哪条轨用于选点剪辑；视频自带的内嵌字幕可列出并「提取并使用」（分离成 `.srt` 轨，源视频不动）
+- **无片段也能导出**：没选片段时点导出会确认「您目前没有选中片段，是否确认全量导出？」，确认后导出整片（只改画质也行）
+- **导出后定位准确**：导出完成弹窗显示输出文件夹路径，「打开所在文件夹」会打开该文件夹并选中导出的视频
 - **工程自动保存 + 断电恢复**（磁盘快照 `~/.clip-video/autosave/`）
 - **导出永不覆盖**：默认输出到 `<源片目录>/<片名>_剪辑/`，重名自动编号 `_2` / `_3`
 
@@ -28,19 +31,11 @@
 
 | 依赖 | 说明 |
 | --- | --- |
-| Rust + GNU 工具链 | `rustup` 安装 `stable-x86_64-pc-windows-gnu` |
-| MinGW-w64 | 提供 `gcc` / `ld` / `windres` / `dlltool`，放在 `C:\mingw64` 并加入 `PATH` |
+| Rust + MSVC 工具链 | `rustup` 安装 `stable-x86_64-pc-windows-msvc`，并装 MSVC Build Tools 2022（含 C++ 工作负载与 Windows SDK） |
 | WebView2 Runtime | Windows 10/11 一般已内置 |
 | ffmpeg / ffprobe | 可打包进 exe，也可直接用系统 `PATH` 里的 |
 
-> 为什么用 GNU 而不是 MSVC：本项目在没有管理员权限、装不了 MSVC Build Tools 的环境下开发，因此改用 GNU + MinGW。**如果你有 Visual Studio C++ Build Tools，用默认 MSVC 工具链也能构建**（忽略下面的 linker 配置即可）。
-
-GNU 工具链配置（`~/.cargo/config.toml`）：
-
-```toml
-[target.x86_64-pc-windows-gnu]
-linker = "C:\\mingw64\\bin\\x86_64-w64-mingw32-gcc.exe"
-```
+> 也可以用 GNU + MinGW 代替 MSVC（本项目早期在没有管理员权限的环境下这么开发）：装 `stable-x86_64-pc-windows-gnu` 与 MinGW-w64，并在 `~/.cargo/config.toml` 里指定 linker：`[target.x86_64-pc-windows-gnu] linker = "C:\\mingw64\\bin\\x86_64-w64-mingw32-gcc.exe"`。两种工具链构建结果一致；当前默认用 MSVC。
 
 ### 构建 / 运行
 
