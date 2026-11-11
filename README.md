@@ -1,62 +1,54 @@
 # Light Clip Video
 
-一个本地「视频 + 字幕」同步剪辑工具：可视化时间轴选点、按字幕行选点，字幕时间轴随剪辑**自动重映射**。视频与字幕共用同一份 `[in, out]` 边界，预览与导出走同一套逻辑，不需要事后回读视频、也不给字幕算偏差。
+一个本地「视频 + 字幕」同步剪辑工具：在时间轴上选点、按字幕行选点，**字幕时间轴随剪辑自动重映射**。视频与字幕共用同一份 `[in, out]` 边界，预览与导出走同一套逻辑——不需要事后回读视频，也不需要给字幕单独算偏差。
 
-本仓库是原 Python 版本（标准库 + 浏览器前端）的 **Tauri 2 桌面移植版**：核心逻辑用 Rust 1:1 重写，前端保持原样，`ffmpeg` / `ffprobe` 作为 sidecar 一并打包。
+本仓库是原 Python 版本（标准库 + 浏览器前端）的 **Tauri 2 桌面移植版**：核心领域逻辑用 Rust 1:1 重写，前端保持原样，`ffmpeg` / `ffprobe` 作为 sidecar 打包进应用。
 
-## 功能
+- 运行形态：一个原生窗口（Tauri 2），内部启动一个本地 HTTP 服务，WebView 加载它。
+- 产物：`light-clip-video.exe`（单文件，可自带 ffmpeg）。
+- 无需联网、无需数据库，所有工程数据保存在本机。
 
-- **时间轴拖拽选点** 与 **字幕行选点** 两种方式，都收敛到同一片段模型；拖拽自动吸附字幕边界
-- 已有片段的边界可直接在时间轴上拖动编辑（左右手柄各改一端、中间整体平移），卡片里也能精确输入时间
-- **字幕时间校准工作台**：单句循环播放边听边改、迷你时间条拖拽两端、整轨偏移、逐句微调；**源 `.srt` 只读**，改动立即对时间轴 / 预览 / 切点 / 导出生效
-- 剪辑后字幕自动重映射，`预览成片` 与导出完全同一坐标
+## 功能一览
+
+- **两种选点方式**：时间轴拖拽选点、按字幕行选点；拖拽自动吸附字幕边界
+- **片段边界可编辑**：拖动左/右手柄只改一端、拖动中间整体平移，卡片里也能精确输入时间
+- **字幕时间校准工作台**：单句循环、迷你时间条拖拽、逐句 ± 微调、整轨偏移；源 `.srt` **只读**，改动立即生效
+- **自动字幕重映射**：剪辑后字幕按同一 `[in,out]` 平移，预览与导出完全一致
 - **两种导出模式**
   - 精确模式：帧级准确，回填原片位深 / profile / level / 色彩标签 / GOP / B 帧 / 音频参数
-  - 无损模式：`-c copy` 流拷贝、起点吸附关键帧（画质逐字节一致）
-- **三档转码方案**：沿用原片 / 720p 省体积 / 自定义，含实时警告与体积预估
-- 工程自动保存 + 断电恢复（磁盘快照 `~/.clip-video/autosave/`）
-- 默认导出到 `<源片目录>/<片名>_剪辑/`，**永不覆盖**（自动编号 `_2` / `_3`）
+  - 无损模式：`-c copy` 流拷贝，画质逐字节一致，起点吸附关键帧
+- **三档转码方案**：沿用原片 / 720p 省体积 / 自定义（含实时警告与体积预估）
+- **自动匹配字幕**：同目录同名 `.srt` / `.vtt`，以及 `片名.语言.srt` 多语言文件
+- **工程自动保存 + 断电恢复**（磁盘快照 `~/.clip-video/autosave/`）
+- **导出永不覆盖**：默认输出到 `<源片目录>/<片名>_剪辑/`，重名自动编号 `_2` / `_3`
 
-## 架构
+## 快速开始（Windows）
 
-| 目录 | 作用 |
+### 前置
+
+| 依赖 | 说明 |
 | --- | --- |
-| `core/` | 纯逻辑：模型、SRT 解析、字幕矫正、时间轴重映射、导出命名、编码检查、ffmpeg 命令构造。无网络、无进程、无 IO，带单元测试。 |
-| `clip-server/` | 内嵌 HTTP 服务，完整复刻原 `server.py` 的 `/api/*` 契约；负责 ffmpeg/ffprobe 执行与导出编排。 |
-| `src-tauri/` | Tauri 2 外壳：启动内嵌服务，打开 WebView 指向 `http://127.0.0.1:<port>`。 |
-| `web/` | 原前端（HTML / JS / CSS），**零改动**直接复用。 |
+| Rust + GNU 工具链 | `rustup` 安装 `stable-x86_64-pc-windows-gnu` |
+| MinGW-w64 | 提供 `gcc` / `ld` / `windres` / `dlltool`，放在 `C:\mingw64` 并加入 `PATH` |
+| WebView2 Runtime | Windows 10/11 一般已内置 |
+| ffmpeg / ffprobe | 可打包进 exe，也可直接用系统 `PATH` 里的 |
 
-之所以由 Rust 内嵌一个本地 HTTP 服务、再让 WebView 加载它，而不是把每个接口改成 `invoke`：前端有约 20 个接口，且时间轴缩略图、波形、视频播放都依赖 HTTP 流式与 Range 请求，保持 HTTP 契约可以让 128 KB 前端一行不改。
+> 为什么用 GNU 而不是 MSVC：本项目在没有管理员权限、装不了 MSVC Build Tools 的环境下开发，因此改用 GNU + MinGW。**如果你有 Visual Studio C++ Build Tools，用默认 MSVC 工具链也能构建**（忽略下面的 linker 配置即可）。
 
-## 环境要求（Windows）
+GNU 工具链配置（`~/.cargo/config.toml`）：
 
-- Rust + **GNU 工具链**（`x86_64-pc-windows-gnu`）与 **MinGW-w64**（提供 `gcc` / `ld` / `windres` / `dlltool`）
-- WebView2 Runtime（Windows 10/11 通常已内置）
-- `ffmpeg` / `ffprobe`（可打包进 exe，也可直接用系统 PATH 里的）
-
-> 说明：Windows 上 Tauri 官方推荐 MSVC 工具链。本仓库是在**无管理员权限**、装不了 MSVC Build Tools 的环境下，用 GNU + MinGW 完成的编译；若你有 Visual Studio C++ Build Tools，直接用默认 MSVC 工具链也能构建。
-
-### 安装工具链（GNU + MinGW，非管理员可用）
-
-```powershell
-# 1) Rust GNU 工具链
-rustup toolchain install stable-x86_64-pc-windows-gnu
-rustup default stable-x86_64-pc-windows-gnu
-
-# 2) MinGW-w64：解压到 C:\mingw64，并把 C:\mingw64\bin 加入 PATH
-
-# 3) 让 cargo 使用 MinGW 的链接器（~/.cargo/config.toml）
-# [target.x86_64-pc-windows-gnu]
-# linker = "C:\\mingw64\\bin\\x86_64-w64-mingw32-gcc.exe"
+```toml
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\mingw64\\bin\\x86_64-w64-mingw32-gcc.exe"
 ```
 
-## 构建 / 运行
+### 构建 / 运行
 
 ```cmd
-:: 1) 把系统 ffmpeg / ffprobe 复制到 src-tauri\bin（打包用；不打包则运行时会回退到 PATH）
+:: 1) 复制系统 ffmpeg/ffprobe 到 src-tauri\bin（打包用；不做也能运行，会回退到 PATH）
 powershell -ExecutionPolicy Bypass -File scripts\fetch_ffmpeg.ps1
 
-:: 2) 开发运行（Tauri 桌面窗口）
+:: 2) 开发运行（打开桌面窗口）
 cargo run -p light-clip-video
 
 :: 3) 只起 HTTP 服务，用浏览器调试
@@ -68,28 +60,57 @@ cargo build --release -p light-clip-video
 ::  产物: target\release\light-clip-video.exe
 ```
 
-## 测试
+### 测试
 
 ```cmd
 cargo test -p clip-core
 ```
 
-## 快捷键
+## 目录结构
 
-| 快捷键 | 作用 |
-| --- | --- |
-| `空格` | 播放 / 暂停 |
-| `,` / `.` | 当前字幕句整体前移 / 后移一个步长 |
-| `↑` / `↓` | 上一句 / 下一句 |
-| `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` | 撤销 / 重做 |
-| `Ctrl+S` | 保存工程 |
-| `Ctrl+E` | 只导出字幕 |
+```
+light-clip-video/
+├─ core/            # 纯领域逻辑（无网络、无进程、无 IO），带单元测试
+│  └─ src/
+│     ├─ model.rs    # Project / Clip / Boundary / Segment 等数据结构
+│     ├─ srt.rs      # SRT / WebVTT 解析与序列化
+│     ├─ cues.rs     # 字幕时间矫正（移动 / 设精确时间 / 整轨偏移 / 审计日志）
+│     ├─ remap.rs    # 时间轴重映射：唯一的 [in,out] 与字幕坐标来源
+│     ├─ paths.rs    # 导出命名与"永不覆盖"编号
+│     ├─ presets.rs  # 三档方案（沿用原片 / 720p / 自定义）
+│     ├─ probe.rs    # ffprobe JSON 解析（纯函数）
+│     ├─ checks.rs   # 转码参数检查与体积预估（UI 与导出共用）
+│     └─ plan.rs     # 构造精确/无损模式下的 ffmpeg 命令
+├─ clip-server/     # 内嵌 HTTP 服务，复刻原 server.py 的 /api/*
+│  └─ src/
+│     ├─ lib.rs      # 路由、状态、自动保存、导出编排
+│     └─ ffmpeg.rs   # 唯一调用 ffmpeg/ffprobe 的地方（带 CREATE_NO_WINDOW）
+├─ src-tauri/       # Tauri 2 桌面外壳（启动服务 + 打开窗口）
+│  ├─ src/main.rs
+│  ├─ tauri.conf.json
+│  └─ bin/           # ffmpeg/ffprobe sidecar（gitignore，构建前用脚本复制）
+├─ web/             # 原前端（HTML/JS/CSS），零改动复用
+├─ scripts/         # 图标生成、ffmpeg 复制
+└─ docs/            # 使用 / 架构 / API / 开发文档（见下）
+```
 
-## 与 Python 原版的差异
+## 文档
 
-- 原版 `python server.py` 启动本地服务并打开浏览器；本版把同一套服务内嵌进 Tauri 进程，WebView 直接加载。
-- 核心算法、HTTP 契约、前端完全一致；`core/` 是 1:1 Rust 重写，并有 30+ 单元测试覆盖。
+| 文档 | 面向 | 内容 |
+| --- | --- | --- |
+| [docs/USAGE.md](docs/USAGE.md) | 使用者 | 从打开媒体到导出的完整操作流程、快捷键、常见问题 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 开发者 | 模块职责、数据流、**必须遵守的核心不变量** |
+| [docs/API.md](docs/API.md) | 开发者 | 全部 `/api/*` 接口的请求/响应 |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发者 | 工具链、构建、加功能流程、踩坑清单 |
 
-## License
+## 设计要点（为什么这样做）
 
-MIT
+- **单一坐标系**：每个片段只有一份 `[in_ms, out_ms]`，视频切点和字幕平移都读它；字幕公式永远是 `t - in + offset`。**禁止**导出后回读视频再补偿字幕（历史上这造成过 9.4s 漂移）。
+- **边界是表达式**：`Boundary = Time(ms) | CueRef(track,index,edge,padding)`，延迟到使用时才解析，所以字幕改时间后切点自动联动。
+- **无损模式只吸附一次关键帧**：起点吸附到最近的关键帧（向下取整到毫秒），吸附后的 `in_ms` 就是唯一真源；命令必须是 `-ss <in> -i <src> -t <dur> -c copy`，禁止 `-avoid_negative_ts` / `-fflags +genpts`。
+- **为什么内嵌 HTTP 而不是 `invoke`**：前端约 20 个接口，缩略图 / 波形 / 视频播放都依赖 HTTP 流式与 Range 请求。保持 HTTP 契约可以让 128 KB 前端一行不改，风险最低。
+- **ffmpeg 一律 `CREATE_NO_WINDOW`**：否则加载一个视频会弹几十个黑框。
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
