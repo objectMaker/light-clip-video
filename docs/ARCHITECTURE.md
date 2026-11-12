@@ -101,6 +101,15 @@ cue' = offset + (clamp(cue, in, out) - in)
 - `core/src/checks.rs::evaluate_encode()` 是**警告与体积预估的唯一真源**，设置页实时检查和导出前确认弹窗都调它，禁止前端另写一套规则。
 - 真正决定体积/画质的只有三个：**分辨率、CRF、峰值码率上限（maxrate/bufsize）**；其余是兼容性与封装。
 
+## 码率决策：单一真源（`core/src/rate.rs`）
+
+- `plan_rate()` 是**设置页体积预估与 ffmpeg 命令共用的唯一决策入口**。`checks.rs::evaluate_encode()` 和 `plan.rs::build_export_plan()` 都调它，不允许任何一处另算码率。
+- `probe.rs::source_bitrates()` 是**唯一读取源片码率的函数**。`EncodeParams` 保留 `video_bps` / `audio_bps` 精确值，`ffprobe` 的 `bit_rate` 绝大多数是**字符串**（`"677123"`），必须走兼容字符串/数字的 `as_i64()`；缺失时依次回落到 `video_kbps × 1000`、`format.bitrate`（或 `size / duration`）。
+- **历史坑**：曾经设置页用兼容字符串的解析器、导出却另用 `Value::as_i64()`，后者永远拿到 0，于是 `plan.rs` 静默回落到 CRF 18，低码率片源输出膨胀到源片 4.28 倍。现在导出路径**没有 CRF 18 兜底**：读不到码率时改保守 CRF 23 + 按分辨率推导的峰值上限，并给 warn。
+- 锁定方案（`source` / `builtin_720p`）的峰值上限取 `min(配方值, 源片视频码率)`，`bufsize` 随上限按配方比例缩放（720p 配方 1800/1000 → 1.8 倍），保证「越剪越大」不再发生；`custom` 尊重用户显式参数，只在超源片码率时警告。
+- `codec_class()` 把源片分为 Legacy / H264Like / Efficient（HEVC、VP9、AV1）/ Mezzanine。Efficient 源按源码率重编码成 H.264 必然掉画质，会明确提示「不剪辑就用无损模式；要更接近原片画质只能提高码率、接受体积变大」。**交付编码固定 H.264**：用户明确不接受 H.265（网页/旧设备兼容性不足），所以不把 H.265 作为推荐方案；自定义面板仍保留该选项，但选中时给 warn 级提示。Mezzanine（ProRes 等或 >50 Mbps）目标码率上限 25 Mbps，避免沿用中间格式码率白占空间。
+- 音频不再只认 AAC：Opus / Vorbis / MP3 的采样率、声道、码率同样会被读取与回填。
+
 ## 导出命名与防覆盖（`core/src/paths.rs`）
 
 - 第一个源片决定名字：`<源片目录>/<片名>_剪辑/<片名>_剪辑.mp4`，字幕同源同目录。
@@ -128,6 +137,8 @@ cue' = offset + (clamp(cue, in, out) - in)
 | `core::remap::preview_state` | 预览与导出共用的一次性结果 |
 | `core::plan::build_export_plan` | 构造精确/无损的 ffmpeg 命令 |
 | `core::cues::shift_cues / set_cue_times` | 字幕时间矫正（纯函数） |
+| `core::probe::source_bitrates` | 唯一的源片精确码率读取入口 |
+| `core::rate::plan_rate` | 码率控制决策（预估与命令共用） |
 | `core::checks::evaluate_encode` | 参数警告 + 体积预估 |
 | `core::paths::resolve_export_target` | 导出路径 + 防覆盖编号 |
 | `clip-server::open_media` | 打开视频/字幕、探测参数、自动匹配 |

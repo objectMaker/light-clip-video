@@ -5,7 +5,8 @@
 
 use crate::model::{EncodeCfg, ExportMode};
 use crate::presets::{resolve_profile, PROFILE_720P};
-use crate::probe::EncodeParams;
+use crate::probe::{source_bitrates, EncodeParams};
+use crate::rate::plan_rate;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -67,6 +68,17 @@ pub fn evaluate_encode(
     let profile = resolve_profile(profile_mode, cfg, &"medium".to_string(), false);
     let cfg = &profile.encode;
     let rc = resolve_rate_control(cfg, match_source_bitrate);
+    // The very same decision the exporter will make. Both the warnings and the
+    // size estimate below derive from it, so the panel can no longer promise
+    // one size while ffmpeg produces another.
+    let rate = plan_rate(
+        info,
+        cfg,
+        match_source_bitrate,
+        profile_mode,
+        mode,
+        if cfg.crf > 0 { cfg.crf } else { 18 },
+    );
 
     if profile_mode == PROFILE_720P && *mode == ExportMode::Lossless {
         warnings.push(item(
@@ -84,7 +96,10 @@ pub fn evaluate_encode(
     let src_rate = a.sample_rate.unwrap_or(0);
     let src_ch = a.channels.unwrap_or(0);
     let src_10bit = v.pix_fmt.as_deref().map(|p| p.contains("10")).unwrap_or(false);
-    let src_equiv = kbps_to_bytes(src_vkb + src_akb, total_ms);
+    // Use the exact bits/s (not the rounded kbps) so the ratio against the
+    // estimate is meaningful for low-bitrate sources.
+    let (src_vbps, src_abps) = source_bitrates(info);
+    let src_equiv = ((src_vbps + src_abps) as f64 * total_ms.max(0) as f64 / 8000.0) as i64;
 
     if cfg.scale_mode == "height" && cfg.height > 0 && src_h > 0 {
         let ratio = (cfg.height as f64 / src_h as f64).powi(2);
@@ -174,9 +189,9 @@ pub fn evaluate_encode(
     }
     if cfg.video_codec == "libx265" {
         warnings.push(item(
-            "info",
-            "改用 H.265 编码",
-            "同画质下体积通常比 H.264 小 30~50%，但编码更慢，部分老设备/浏览器不能硬解。原片的 H.264 profile / level 不适用于 H.265，会被自动忽略。",
+            "warn",
+            "H.265 兼容性弱于 H.264",
+            "H.265 虽在同画质下更省体积，但网页播放器、旧手机、部分内置浏览器没有硬解，可能放不了或卡顿。本项目以 H.264 作为交付格式；除非确认所有播放端都支持，否则请改回 H.264。原片的 H.264 profile / level 不适用于 H.265，会被自动忽略。",
         ));
     }
     if rc == "bitrate" && cfg.video_kbps > 0 && src_vkb > 0 {
@@ -195,16 +210,15 @@ pub fn evaluate_encode(
         }
     }
     if rc == "crf" {
-        if cfg.maxrate_kbps > 0 {
-            let buf = if cfg.bufsize_kbps > 0 {
-                cfg.bufsize_kbps
-            } else {
-                (cfg.maxrate_kbps as f64 * 1.8) as i64
-            };
+        if let Some(cap) = rate.maxrate_kbps {
+            // Report the EFFECTIVE values. For a 677 kbps source the 720p
+            // recipe's 1000k/1800k is clamped to 677k/1219k, and showing the
+            // raw recipe here would contradict the ffmpeg command.
+            let buf = rate.bufsize_kbps.unwrap_or((cap as f64 * 1.8) as i64);
             warnings.push(item(
                 "info",
                 "CRF + 峰值码率上限（capped CRF）",
-                &format!("按 CRF {} 分配画质，同时用 -maxrate {}k / -bufsize {}k 封住峰值。复杂画面也不会把体积撑爆，这是「恒定质量 + 可控体积」的常用组合。", cfg.crf, cfg.maxrate_kbps, buf),
+                &format!("按 CRF {} 分配画质，同时用 -maxrate {}k / -bufsize {}k 封住峰值。复杂画面也不会把体积撑爆，这是「恒定质量 + 可控体积」的常用组合。", rate.crf, cap, buf),
             ));
         } else {
             warnings.push(item(
@@ -253,22 +267,22 @@ pub fn evaluate_encode(
             "流拷贝每段尾部约多 0.2 秒，concat 时逐段累积，字幕会一段比一段提前。多段合并且在意同步时请改用精确模式。",
         ));
     }
-    if *mode == ExportMode::Lossless
-        && [cfg.width, cfg.height]
-            .iter()
-            .any(|x| *x != 0)
-        || cfg.scale_mode != ""
-        || cfg.fps != ""
-        || cfg.pix_fmt != ""
-        || cfg.profile != ""
-        || cfg.level != ""
+    // The old expression was `(lossless && overrides) || override || ...`, so
+    // the 720p recipe (scale_mode="height") raised this warning even in PRECISE
+    // mode. Group the override test first, then gate it on lossless.
+    let has_transcode_overrides = [cfg.width, cfg.height].iter().any(|x| *x != 0)
+        || !cfg.scale_mode.is_empty()
+        || !cfg.fps.is_empty()
+        || !cfg.pix_fmt.is_empty()
+        || !cfg.profile.is_empty()
+        || !cfg.level.is_empty()
         || cfg.video_kbps != 0
         || cfg.audio_kbps != 0
         || cfg.sample_rate != 0
         || cfg.channels != 0
-        || cfg.video_codec != ""
-        || cfg.maxrate_kbps != 0
-    {
+        || !cfg.video_codec.is_empty()
+        || cfg.maxrate_kbps != 0;
+    if *mode == ExportMode::Lossless && has_transcode_overrides {
         warnings.push(item(
             "info",
             "无损模式下转码参数不生效",
@@ -276,19 +290,48 @@ pub fn evaluate_encode(
         ));
     }
 
-    let audio_kbps = if cfg.audio_codec == "none" { 0 } else { cfg.audio_kbps.max(src_akb) };
+    // Rate-plan notes (source-aware ceiling, efficient-codec quality warning,
+    // unreadable bitrate, ...) are shared with the exporter.
+    for (level, title, text) in &rate.notes {
+        // The fixed-bitrate rule above already says the same thing; don't
+        // show it twice under two slightly different titles.
+        let duplicate = title == "目标码率高于源片"
+            && warnings.iter().any(|w| w.title == "目标码率高于原片");
+        if !duplicate && !warnings.iter().any(|w| w.title == *title) {
+            warnings.push(item(level, title, text));
+        }
+    }
+
+    let audio_kbps = if cfg.audio_codec == "none" {
+        0
+    } else if cfg.audio_codec == "copy" {
+        src_akb
+    } else {
+        // Match the actual `-b:a` the exporter will write, including the
+        // locked-profile clamp to the source audio bitrate.
+        rate.audio_bps.map(|b| b / 1000).unwrap_or(192)
+    };
     let (estimated, note, is_upper_bound) = if *mode == ExportMode::Lossless {
         (kbps_to_bytes(src_vkb + src_akb, total_ms), "流拷贝沿用原片码率，估算较准确。".to_string(), false)
-    } else if rc == "bitrate" && cfg.video_kbps > 0 {
-        (kbps_to_bytes(cfg.video_kbps + audio_kbps, total_ms), "按你设定的固定码率估算；实际值会随画面复杂度小幅浮动。".to_string(), false)
-    } else if rc == "crf" && cfg.maxrate_kbps > 0 {
-        (kbps_to_bytes(cfg.maxrate_kbps + audio_kbps, total_ms), format!("按峰值上限 {} kbps 估算的体积天花板（最坏情况）；静止/对话场景实际会明显更小。", cfg.maxrate_kbps), true)
-    } else if rc == "crf" {
-        (0, "CRF 按质量分配码率，无法预估体积。".to_string(), false)
+    } else if let Some(bps) = rate.video_bps {
+        let target = bps / 1000;
+        let text = match rate.maxrate_kbps {
+            Some(cap) => format!(
+                "按目标视频码率 {} kbps（峰值上限 {} kbps）+ 音频 {} kbps 估算；实际值会随画面复杂度小幅浮动。",
+                target, cap, audio_kbps
+            ),
+            None => format!(
+                "按目标视频码率 {} kbps + 音频 {} kbps 估算；实际值会随画面复杂度小幅浮动。",
+                target, audio_kbps
+            ),
+        };
+        (kbps_to_bytes(target + audio_kbps, total_ms), text, false)
+    } else if let Some(cap) = rate.maxrate_kbps {
+        (kbps_to_bytes(cap + audio_kbps, total_ms), format!("按峰值上限 {} kbps 估算的体积天花板（最坏情况）；静止/对话场景实际会明显更小。", cap), true)
     } else {
-        (kbps_to_bytes(src_vkb + audio_kbps, total_ms), "沿用原片码率，估算较准确。".to_string(), false)
+        (0, "CRF 按质量分配码率，无法预估体积。".to_string(), false)
     };
-    let estimated_opt = if *mode == ExportMode::Lossless || rc != "crf" || cfg.maxrate_kbps > 0 || rc == "bitrate" {
+    let estimated_opt = if *mode == ExportMode::Lossless || rate.video_bps.is_some() || rate.maxrate_kbps.is_some() {
         Some(estimated)
     } else {
         None
@@ -335,11 +378,13 @@ mod tests {
                 channels: Some(2),
                 profile: Some("aac_low".into()),
                 audio_kbps: 192,
+                audio_bps: 192_000,
             },
             format: FormatParams {
                 duration_ms: 60_000,
                 size_bytes: 0,
                 bitrate_kbps: 8192,
+                bitrate_bps: 8_192_000,
             },
         }
     }
@@ -368,5 +413,34 @@ mod tests {
     fn lossless_multi_clip_warns_drift() {
         let e = evaluate_encode(&info(), &EncodeCfg::default(), 60_000, &ExportMode::Lossless, 3, true, "custom");
         assert!(e.warnings.iter().any(|w| w.title.contains("累积漂移")));
+    }
+
+    fn av1_low_bitrate() -> EncodeParams {
+        let mut i = info();
+        i.video.codec = Some("av1".into());
+        i.video.video_bps = 677_123;
+        i.video.video_kbps = 677;
+        i.audio.codec = Some("opus".into());
+        i.audio.audio_bps = 128_456;
+        i.audio.audio_kbps = 128;
+        i.format.bitrate_bps = 805_579;
+        i.format.bitrate_kbps = 805;
+        i
+    }
+
+    #[test]
+    fn low_bitrate_av1_source_profile_never_estimates_larger() {
+        let e = evaluate_encode(&av1_low_bitrate(), &EncodeCfg::default(), 60_000, &ExportMode::Precise, 1, true, "source");
+        assert!(e.ratio.unwrap() < 1.0, "estimate must be smaller than the source: {:?}", e.ratio);
+        assert!(e.warnings.iter().any(|w| w.title.contains("高效编码")));
+        assert!(!e.warnings.iter().any(|w| w.title.contains("未读到")));
+    }
+
+    #[test]
+    fn builtin_720p_ceiling_clamped_and_no_false_lossless_hint() {
+        let e = evaluate_encode(&av1_low_bitrate(), &EncodeCfg::default(), 60_000, &ExportMode::Precise, 1, true, "builtin_720p");
+        assert!(e.ratio.unwrap() < 1.0, "720p recipe must not exceed the source: {:?}", e.ratio);
+        assert!(e.warnings.iter().any(|w| w.title.contains("下调")));
+        assert!(!e.warnings.iter().any(|w| w.title == "无损模式下转码参数不生效"));
     }
 }

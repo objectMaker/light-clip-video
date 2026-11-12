@@ -15,10 +15,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::checks::{evaluate_encode, resolve_rate_control};
+use crate::checks::evaluate_encode;
 use crate::model::{ExportMode, Project, Source};
 use crate::presets::{resolve_profile, PROFILE_720P};
-use crate::probe::EncodeParams;
+use crate::probe::{AudioParams, EncodeParams, FormatParams, VideoParams};
+use crate::rate::plan_rate;
 use crate::remap::{build_segments, preview_state};
 use crate::srt::{to_vtt, write_srt};
 
@@ -184,9 +185,25 @@ pub fn build_export_plan(
         let mut cmd: Vec<String> = vec![ffmpeg_bin.to_string(), "-y".into(), "-v".into(), "error".into()];
 
         if *mode == ExportMode::Precise {
-            let info = info_by_source.get(&source.id);
-            let v = info.map(|i| &i.video);
-            let a = info.map(|i| &i.audio);
+            // Prefer the single ffprobe snapshot. The legacy bitrate map is
+            // only a fallback for callers that predate `EncodeParams::*_bps`.
+            let info: EncodeParams = info_by_source
+                .get(&source.id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    let (vb, ab) = bitrate_by_source.get(&source.id).copied().unwrap_or((0, 0));
+                    EncodeParams {
+                        video: VideoParams { video_bps: vb, video_kbps: vb / 1000, ..Default::default() },
+                        audio: AudioParams { audio_bps: ab, audio_kbps: ab / 1000, ..Default::default() },
+                        format: FormatParams {
+                            bitrate_bps: vb + ab,
+                            bitrate_kbps: (vb + ab) / 1000,
+                            ..Default::default()
+                        },
+                    }
+                });
+            let v = Some(&info.video);
+            let a = Some(&info.audio);
             let mut resolved: HashMap<String, String> = HashMap::new();
             if let Some(v) = v {
                 if v.supported {
@@ -327,34 +344,31 @@ pub fn build_export_plan(
                 video_options.push(format!("scale={}:flags=lanczos", scale));
             }
 
-            let rc = resolve_rate_control(cfg, project.output.match_source_bitrate);
-            let (video_bps, audio_bps) = bitrate_by_source
-                .get(&source.id)
-                .copied()
-                .unwrap_or((0, 0));
-            if rc == "crf" {
+            // ONE decision drives both the settings-page estimate and this
+            // command. There is deliberately no `else -> CRF 18` fallback:
+            // that fallback was the 4x size explosion on low-bitrate sources.
+            let rate = plan_rate(
+                &info,
+                cfg,
+                project.output.match_source_bitrate,
+                &project.output.profile_mode,
+                mode,
+                project.output.crf,
+            );
+            if let Some(bps) = rate.video_bps {
+                video_options.push("-b:v".into());
+                video_options.push(bps.to_string());
+            } else {
                 video_options.push("-crf".into());
-                video_options.push((if cfg.crf > 0 { cfg.crf } else { project.output.crf }).to_string());
-                if cfg.maxrate_kbps > 0 {
-                    video_options.push("-maxrate".into());
-                    video_options.push(format!("{}k", cfg.maxrate_kbps));
-                    let buf = if cfg.bufsize_kbps > 0 {
-                        cfg.bufsize_kbps
-                    } else {
-                        (cfg.maxrate_kbps as f64 * 1.8) as i64
-                    };
+                video_options.push(rate.crf.to_string());
+            }
+            if let Some(cap) = rate.maxrate_kbps {
+                video_options.push("-maxrate".into());
+                video_options.push(format!("{}k", cap));
+                if let Some(buf) = rate.bufsize_kbps {
                     video_options.push("-bufsize".into());
                     video_options.push(format!("{}k", buf));
                 }
-            } else if rc == "bitrate" && cfg.video_kbps > 0 {
-                video_options.push("-b:v".into());
-                video_options.push(format!("{}k", cfg.video_kbps));
-            } else if video_bps > 0 {
-                video_options.push("-b:v".into());
-                video_options.push(video_bps.to_string());
-            } else {
-                video_options.push("-crf".into());
-                video_options.push(project.output.crf.to_string());
             }
 
             let (audio_map, audio_options) = match cfg.audio_codec.as_str() {
@@ -390,12 +404,9 @@ pub fn build_export_plan(
                         opt.push("-ac".into());
                         opt.push(ac.to_string());
                     }
-                    if cfg.audio_kbps > 0 {
+                    if let Some(bps) = rate.audio_bps {
                         opt.push("-b:a".into());
-                        opt.push(format!("{}k", cfg.audio_kbps));
-                    } else if audio_bps > 0 {
-                        opt.push("-b:a".into());
-                        opt.push(audio_bps.to_string());
+                        opt.push(bps.to_string());
                     } else {
                         opt.push("-b:a".into());
                         opt.push("192k".into());
@@ -585,6 +596,7 @@ mod tests {
                 channels: Some(2),
                 profile: Some("aac_low".into()),
                 audio_kbps: 192,
+                audio_bps: 192_000,
             },
             format: FormatParams::default(),
         }
@@ -712,5 +724,86 @@ mod tests {
         assert_no_empty_args(&cmd);
         let pos = cmd.iter().position(|a| a == "-profile:v").expect("profile flag expected");
         assert_eq!(cmd[pos + 1], "high");
+    }
+
+    /// The exact shape of the AV1/Opus VLOG that reproduced "转码后反而变大".
+    fn av1_info() -> EncodeParams {
+        EncodeParams {
+            video: VideoParams {
+                codec: Some("av1".into()),
+                supported: false,
+                pix_fmt: Some("yuv420p".into()),
+                fps: Some("30/1".into()),
+                fps_float: 30.0,
+                width: 1280,
+                height: 720,
+                video_bps: 677_123,
+                video_kbps: 677,
+                ..Default::default()
+            },
+            audio: AudioParams {
+                codec: Some("opus".into()),
+                sample_rate: Some(48000),
+                channels: Some(2),
+                audio_bps: 128_456,
+                audio_kbps: 128,
+                ..Default::default()
+            },
+            format: FormatParams {
+                bitrate_bps: 805_579,
+                bitrate_kbps: 805,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn cmd_for(profile_mode: &str, i: EncodeParams) -> (Vec<String>, Vec<String>) {
+        let mut p = project();
+        p.output.profile_mode = profile_mode.to_string();
+        let mut infos = HashMap::new();
+        infos.insert("s1".into(), i);
+        // Deliberately EMPTY legacy bitrate map: the exporter must no longer
+        // depend on the buggy second parser.
+        let plan = build_export_plan(
+            &p,
+            "D:/out/clip.mp4",
+            "D:/tmp/work",
+            "ffmpeg",
+            &infos,
+            &HashMap::new(),
+        )
+        .unwrap();
+        (plan.segment_commands[0].clone(), plan.warnings.clone())
+    }
+
+    fn value_after(cmd: &[String], flag: &str) -> String {
+        let pos = cmd.iter().position(|a| a == flag).unwrap_or_else(|| panic!("missing {flag}: {cmd:?}"));
+        cmd[pos + 1].clone()
+    }
+
+    #[test]
+    fn low_bitrate_source_profile_never_silently_uses_crf18() {
+        let (cmd, warnings) = cmd_for("source", av1_info());
+        assert!(!cmd.contains(&"-crf".to_string()), "must not fall back to CRF: {cmd:?}");
+        assert_eq!(value_after(&cmd, "-b:v"), "677123");
+        assert_eq!(value_after(&cmd, "-maxrate"), "677k");
+        assert_eq!(value_after(&cmd, "-b:a"), "128456");
+        assert!(warnings.iter().any(|w| w.contains("高效编码")));
+    }
+
+    #[test]
+    fn builtin_720p_clamps_ceiling_and_buffer_to_source() {
+        let (cmd, _) = cmd_for("builtin_720p", av1_info());
+        assert_eq!(value_after(&cmd, "-crf"), "25");
+        assert_eq!(value_after(&cmd, "-maxrate"), "677k"); // not 1000k
+        assert_eq!(value_after(&cmd, "-bufsize"), "1219k"); // not 1800k
+        assert_eq!(value_after(&cmd, "-b:a"), "96000");
+    }
+
+    #[test]
+    fn builtin_720p_keeps_recipe_on_high_bitrate_source() {
+        let (cmd, _) = cmd_for("builtin_720p", info());
+        assert_eq!(value_after(&cmd, "-maxrate"), "1000k");
+        assert_eq!(value_after(&cmd, "-bufsize"), "1800k");
     }
 }

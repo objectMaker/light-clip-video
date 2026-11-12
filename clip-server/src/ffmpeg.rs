@@ -203,44 +203,6 @@ pub fn list_keyframes(ffprobe: &Path, path: &str) -> Vec<i64> {
     }
 }
 
-/// `(video_bps, audio_bps)` in bytes-per-second, with container fallback.
-pub fn probe_bitrates(ffprobe: &Path, path: &str) -> (i64, i64) {
-    let json = match probe_json(
-        ffprobe,
-        &["-v", "error", "-show_streams", "-show_format", "-of", "json", path],
-    ) {
-        Ok(j) => j,
-        Err(_) => return (0, 0),
-    };
-    let streams = json
-        .get("streams")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let v = streams
-        .iter()
-        .find(|s| s.get("codec_type").and_then(|c| c.as_str()) == Some("video"));
-    let a = streams
-        .iter()
-        .find(|s| s.get("codec_type").and_then(|c| c.as_str()) == Some("audio"));
-    let vb = v.and_then(|s| s.get("bit_rate")).and_then(|b| b.as_i64()).unwrap_or(0);
-    let ab = a.and_then(|s| s.get("bit_rate")).and_then(|b| b.as_i64()).unwrap_or(0);
-    let total = json
-        .get("format")
-        .and_then(|f| f.get("bit_rate"))
-        .and_then(|b| b.as_i64())
-        .unwrap_or(0);
-    let mut video_bps = vb;
-    let mut audio_bps = ab;
-    if video_bps == 0 && total > 0 {
-        video_bps = (total - audio_bps).max(1);
-    }
-    if audio_bps == 0 && total > 0 && video_bps > 0 {
-        audio_bps = (total - video_bps).max(1);
-    }
-    (video_bps, audio_bps)
-}
-
 /// Run one ffmpeg command, streaming `-progress pipe:1` into `on_progress`.
 fn run_ffmpeg_progress(
     ffmpeg: &Path,
@@ -334,10 +296,15 @@ pub fn execute_export(
     let mut info_by_source: HashMap<String, clip_core::probe::EncodeParams> = HashMap::new();
     let mut bitrate_by_source: HashMap<String, (i64, i64)> = HashMap::new();
     for s in &project.sources {
+        // ONE ffprobe per source. `source_bitrates()` understands ffprobe's
+        // STRING `bit_rate` values; the removed `probe_bitrates()` used
+        // `Value::as_i64()` and therefore always returned (0, 0), which made
+        // the exporter silently fall back to CRF 18 and inflate low-bitrate
+        // files by ~4x.
         let info = probe_encode_params(ffprobe, &s.path)?;
-        let (vb, ab) = probe_bitrates(ffprobe, &s.path);
+        let rates = clip_core::probe::source_bitrates(&info);
+        bitrate_by_source.insert(s.id.clone(), rates);
         info_by_source.insert(s.id.clone(), info);
-        bitrate_by_source.insert(s.id.clone(), (vb, ab));
     }
 
     // Temp files live inside the output folder (same drive as the final

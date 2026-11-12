@@ -12,6 +12,7 @@ pub mod paths;
 pub mod plan;
 pub mod presets;
 pub mod probe;
+pub mod rate;
 pub mod remap;
 pub mod srt;
 
@@ -34,7 +35,11 @@ pub use presets::{
     profile_catalog, resolve_profile, Bullet, ProfileCatalogEntry, ResolvedProfile, builtin_720p,
     BUILTIN_720P_SPEED, PROFILE_720P, PROFILE_CUSTOM, PROFILE_IDS, PROFILE_SOURCE,
 };
-pub use probe::{parse_encode_params, parse_keyframes_csv, parse_source, snap_down, EncodeParams};
+pub use probe::{
+    parse_encode_params, parse_keyframes_csv, parse_source, parse_subtitle_streams, snap_down,
+    source_bitrates, AudioParams, EncodeParams, FormatParams, VideoParams,
+};
+pub use rate::{codec_class, plan_rate, CodecClass, RateNote, RatePlan};
 pub use remap::{
     build_segments, clips_from_cue_selection, preview_state, remap_cues, resolve_boundary,
     snap_to_cue, tracks_for_clip, PreviewState, RemapError, Segment,

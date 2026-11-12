@@ -36,12 +36,12 @@ const nd = uniqOpts
 // so the user never has to guess a legal ffmpeg value.
 export const ENCODE_SPECS: EncodeSpec[] = [
   { group: '视频 · 画面', key: 'video_codec', label: '视频编码器',
-    tip: '压缩算法。H.264 几乎所有设备都能播；H.265 同画质通常小 30~50%，但编码更慢、老设备/浏览器可能放不了。换编码器一定重新压缩，画质上限仍是原片，不会变清晰。',
+    tip: '压缩算法。本项目默认 H.264：几乎所有设备、网页播放器和老手机都能播。H.265 虽在同画质下小 30~50%，但很多浏览器和旧设备没有硬解，广泛分发时不建议选。换编码器一定重新压缩，画质上限仍是原片，不会变清晰。',
     source: (i) => (i?.video?.codec ? String(i.video.codec).toUpperCase() : '自动'),
     options: () => nd([
       opt('', '沿用原片（H.264 / libx264）'),
       opt('libx264', 'H.264 / libx264（兼容性最好）'),
-      opt('libx265', 'H.265 / libx265（省体积、编码慢）'),
+      opt('libx265', 'H.265 / libx265（兼容性差，不建议分发）'),
     ]) },
   { group: '视频 · 画面', key: 'resolution', label: '分辨率',
     tip: '像素数决定细节上限，也几乎线性影响体积。放大（如 720p→1080p）只是把已有像素插值，细节不会变多，反而更占空间；缩小分辨率若不一起降码率，体积也不会自动变小。想省体积：先缩小，再调低目标码率。',

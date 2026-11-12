@@ -133,7 +133,8 @@ pub fn profile_catalog() -> Vec<ProfileCatalogEntry> {
             label: "沿用原片".to_string(),
             tagline: "什么都不改".to_string(),
             detail: "把原片的位深、profile、level、色彩标签、GOP、B 帧、音频采样率与声道全部回填，\
-                     并沿用原片码率。体积约等于保留时长占比，画质格式与原片一致。此方案下所有参数锁定。"
+                     并沿用原片码率，同时以原片码率作为峰值上限，保证输出不会「越剪越大」。\
+                     体积约等于保留时长占比，画质格式与原片一致。此方案下所有参数锁定。"
                 .to_string(),
             bullets: vec![],
             command: None,
@@ -147,12 +148,13 @@ pub fn profile_catalog() -> Vec<ProfileCatalogEntry> {
             label: "720p 省体积".to_string(),
             tagline: "丢 1080p 进来就压成 720p".to_string(),
             detail: "你给的那套命令。真正决定体积与画质的只有分辨率、CRF 和峰值码率上限这三项；\
-                     其余是兼容性与封装设置。宽度按原比例自动计算，16:9 / 4:3 / 超宽 / 竖屏都能用。"
+                     其余是兼容性与封装设置。宽度按原比例自动计算，16:9 / 4:3 / 超宽 / 竖屏都能用。\
+                     峰值上限会自动取 min(配方值, 源片视频码率)，所以低码率片源不会反而变大。"
                 .to_string(),
             bullets: vec![
                 Bullet { name: "分辨率".into(), value: "高度缩到 720，宽度按原比例自动且取偶数".into(), why: "体积的最大杠杆；放大不会变清晰，缩小才会真的省空间".into() },
                 Bullet { name: "画质".into(), value: "CRF 25（恒定质量）".into(), why: "数值越大体积越小、细节越糊；25 是明显省体积但还能看的档位".into() },
-                Bullet { name: "码率天花板".into(), value: "峰值 1000 kbps / 缓冲 1800 kbps".into(), why: "给 CRF 加 VBV 上限，打斗、雪花等复杂画面也不会把体积撑爆".into() },
+                Bullet { name: "码率天花板".into(), value: "峰值 1000 kbps / 缓冲 1800 kbps（源片码率更低时自动按比例下调）".into(), why: "给 CRF 加 VBV 上限；低码率源片（AV1/VP9 等）会自动下调，避免「越剪越大」".into() },
                 Bullet { name: "编码".into(), value: "H.264 / slow / 8-bit yuv420p".into(), why: "slow 在同画质下更省体积；8-bit 保证几乎所有播放器都能放".into() },
                 Bullet { name: "音频".into(), value: "AAC 96 kbps 立体声".into(), why: "音频占比本来就小，96k 对语音足够，音乐可到 128k".into() },
                 Bullet { name: "封装".into(), value: "MP4 + faststart，不把字幕封装进视频".into(), why: "边下边播；外挂 SRT 仍会按剪辑后的时间轴生成".into() },

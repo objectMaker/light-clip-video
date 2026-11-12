@@ -68,6 +68,11 @@ pub struct VideoParams {
     pub width: i64,
     pub height: i64,
     pub video_kbps: i64,
+    /// Exact bits/s. `ffprobe` reports `bit_rate` as a STRING for most files;
+    /// keeping the unrounded value here stops the panel and the exporter from
+    /// drifting apart (and from ever seeing a bogus 0).
+    #[serde(default)]
+    pub video_bps: i64,
     pub b_frames: i64,
     pub colorspace: Option<String>,
     pub color_trc: Option<String>,
@@ -82,6 +87,9 @@ pub struct AudioParams {
     pub channels: Option<i64>,
     pub profile: Option<String>,
     pub audio_kbps: i64,
+    /// Exact bits/s (see `VideoParams::video_bps`).
+    #[serde(default)]
+    pub audio_bps: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -89,6 +97,10 @@ pub struct FormatParams {
     pub duration_ms: i64,
     pub size_bytes: i64,
     pub bitrate_kbps: i64,
+    /// Container-level overall bitrate in exact bits/s. Used as the fallback
+    /// when a stream does not expose its own `bit_rate` (common in MKV/WebM).
+    #[serde(default)]
+    pub bitrate_bps: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -136,26 +148,47 @@ pub fn parse_encode_params(value: &Value) -> EncodeParams {
     let bframes = as_i64(&v["has_b_frames"]).unwrap_or(0);
     let width = as_i64(&v["width"]).unwrap_or(0);
     let height = as_i64(&v["height"]).unwrap_or(0);
-    let video_kbps = as_i64(&v["bit_rate"]).unwrap_or(0) / 1000;
-    let duration_ms = (as_f64(&fmt["duration"]).unwrap_or(0.0) * 1000.0) as i64;
+    let video_bps = as_i64(&v["bit_rate"]).unwrap_or(0);
+    let video_kbps = video_bps / 1000;
+    let duration_s = as_f64(&fmt["duration"]).unwrap_or(0.0);
+    let duration_ms = (duration_s * 1000.0) as i64;
     let size_bytes = as_i64(&fmt["size"]).unwrap_or(0);
+    let total_bps = as_i64(&fmt["bit_rate"]).unwrap_or(0);
+    // Some containers omit format.bit_rate; derive it from size / duration.
+    let total_bps = if total_bps > 0 {
+        total_bps
+    } else if duration_s > 0.0 {
+        (size_bytes as f64 * 8.0 / duration_s) as i64
+    } else {
+        0
+    };
 
-    let audio = if clean_str(&a["codec_name"]).as_deref() == Some("aac") {
+    // Audio facts must not be limited to AAC: Opus / Vorbis / MP3 sources are
+    // common (YouTube ships Opus). Losing these made the estimator undercount
+    // and the exporter fall back to a hard-coded 192k AAC.
+    let audio_codec = clean_str(&a["codec_name"]);
+    let audio_bps = as_i64(&a["bit_rate"]).unwrap_or(0);
+    let audio = if audio_codec.is_some() {
         AudioParams {
-            codec: Some("aac".to_string()),
+            codec: audio_codec.clone(),
             sample_rate: as_i64(&a["sample_rate"]),
             channels: as_i64(&a["channels"]),
-            profile: match clean_str(&a["profile"]).as_deref() {
-                Some("LC") | Some("AAC-LC") => Some("aac_low".to_string()),
-                _ => None,
+            profile: if audio_codec.as_deref() == Some("aac") {
+                match clean_str(&a["profile"]).as_deref() {
+                    Some("LC") | Some("AAC-LC") => Some("aac_low".to_string()),
+                    _ => None,
+                }
+            } else {
+                None
             },
-            audio_kbps: as_i64(&a["bit_rate"]).unwrap_or(0) / 1000,
+            audio_kbps: audio_bps / 1000,
+            audio_bps,
         }
     } else {
         AudioParams::default()
     };
 
-    let total_kbps = (as_i64(&fmt["bit_rate"]).unwrap_or(0) / 1000) as i64;
+    let total_kbps = total_bps / 1000;
     EncodeParams {
         video: VideoParams {
             codec: codec.clone(),
@@ -185,6 +218,7 @@ pub fn parse_encode_params(value: &Value) -> EncodeParams {
             width,
             height,
             video_kbps,
+            video_bps,
             b_frames: bframes,
             colorspace: clean_str(&v["color_space"]),
             color_trc: clean_str(&v["color_transfer"]),
@@ -196,8 +230,47 @@ pub fn parse_encode_params(value: &Value) -> EncodeParams {
             duration_ms,
             size_bytes,
             bitrate_kbps: (video_kbps + audio.audio_kbps).max(total_kbps),
+            bitrate_bps: total_bps,
         },
     }
+}
+
+/// The ONE way to obtain `(video_bps, audio_bps)` for a source.
+///
+/// Both the settings-page estimator and the ffmpeg command builder call this.
+/// It prefers the exact per-stream value, falls back to the rounded kbps, and
+/// finally to the container's overall bitrate minus the other stream. This is
+/// what makes a low-bitrate AV1 / VP9 / Opus source behave like any other one:
+/// the old exporter parser only accepted JSON numbers, so ffprobe's STRING
+/// `bit_rate` silently became 0 and the exporter fell back to CRF 18.
+pub fn source_bitrates(info: &EncodeParams) -> (i64, i64) {
+    let vb = if info.video.video_bps > 0 {
+        info.video.video_bps
+    } else {
+        info.video.video_kbps * 1000
+    };
+    let ab = if info.audio.audio_bps > 0 {
+        info.audio.audio_bps
+    } else {
+        info.audio.audio_kbps * 1000
+    };
+    let total = if info.format.bitrate_bps > 0 {
+        info.format.bitrate_bps
+    } else {
+        info.format.bitrate_kbps * 1000
+    };
+    let mut video_bps = vb;
+    let mut audio_bps = ab;
+    if video_bps == 0 && total > 0 {
+        video_bps = (total - audio_bps).max(1);
+    }
+    // Only derive audio from the leftover when the VIDEO stream reported its
+    // own bitrate. Otherwise video already absorbed the whole container rate
+    // and subtracting it would invent a bogus 1 bit/s audio stream.
+    if audio_bps == 0 && vb > 0 && total > vb {
+        audio_bps = total - vb;
+    }
+    (video_bps, audio_bps)
 }
 
 /// One subtitle stream embedded in a video file (MKV/MP4/MOV …). `index` is
@@ -336,6 +409,62 @@ mod tests {
         let v = json!({"streams":[{"codec_type":"video","codec_name":"hevc","pix_fmt":"yuv420p"}],"format":{}});
         let p = parse_encode_params(&v);
         assert!(!p.video.supported);
+    }
+
+    #[test]
+    fn string_bitrates_and_opus_audio_keep_exact_values() {
+        // Real ffprobe output for the AV1 / Opus VLOG that exposed the bug:
+        // every bit_rate is a DECIMAL STRING, not a JSON number.
+        let v = json!({
+            "streams": [
+                {"codec_type":"video","codec_name":"av1","pix_fmt":"yuv420p",
+                 "width":1280,"height":720,"r_frame_rate":"30/1","avg_frame_rate":"30/1",
+                 "bit_rate":"677123"},
+                {"codec_type":"audio","codec_name":"opus","sample_rate":"48000",
+                 "channels":2,"bit_rate":"128456"}
+            ],
+            "format": {"duration":"60.000000","size":"6100000","bit_rate":"813456"}
+        });
+        let p = parse_encode_params(&v);
+        assert_eq!(p.video.codec.as_deref(), Some("av1"));
+        assert_eq!(p.video.video_bps, 677123);
+        assert_eq!(p.video.video_kbps, 677);
+        // Non-AAC audio must survive too (YouTube ships Opus).
+        assert_eq!(p.audio.codec.as_deref(), Some("opus"));
+        assert_eq!(p.audio.sample_rate, Some(48000));
+        assert_eq!(p.audio.channels, Some(2));
+        assert_eq!(p.audio.audio_bps, 128456);
+        assert_eq!(p.audio.profile, None);
+        assert_eq!(source_bitrates(&p), (677123, 128456));
+    }
+
+    #[test]
+    fn missing_stream_bitrates_fall_back_to_container() {
+        // MKV / WebM often omit per-stream bit_rate entirely.
+        let v = json!({
+            "streams": [
+                {"codec_type":"video","codec_name":"vp9","width":1920,"height":1080},
+                {"codec_type":"audio","codec_name":"opus","channels":2}
+            ],
+            "format": {"duration":"10.000000","size":"2500000","bit_rate":"2000000"}
+        });
+        let p = parse_encode_params(&v);
+        assert_eq!(p.video.video_bps, 0);
+        assert_eq!(p.format.bitrate_bps, 2_000_000);
+        let (vb, ab) = source_bitrates(&p);
+        assert_eq!(vb, 2_000_000); // whole container rate, no invented 1 bit/s audio
+        assert_eq!(ab, 0);
+    }
+
+    #[test]
+    fn container_bitrate_derived_from_size_when_absent() {
+        let v = json!({
+            "streams": [{"codec_type":"video","codec_name":"h264"}],
+            "format": {"duration":"8.000000","size":"4000000"}
+        });
+        let p = parse_encode_params(&v);
+        assert_eq!(p.format.bitrate_bps, 4_000_000);
+        assert_eq!(source_bitrates(&p).0, 4_000_000);
     }
 
     #[test]
