@@ -69,6 +69,19 @@ export function Timeline({ app }: { app: AppApi }) {
     app.setView({ ...app.view, startMs: Math.max(0, Math.min(app.view.startMs + delta, max)) })
   }
 
+  /** Right-click on the pan slider: center the visible window on the playhead
+   * without changing zoom. Handy when the playhead wanders off screen after
+   * zooming in. */
+  const centerOnPlayhead = () => {
+    const a = appRef.current
+    const d = a.currentSource?.duration_ms || 1
+    const visible = a.viewSpanMs
+    const max = Math.max(0, d - visible)
+    const ns = Math.max(0, Math.min(a.srcMs - visible / 2, max))
+    a.setView({ ...a.view, startMs: ns })
+    a.notify(`视图已居中到播放头 ${fmt(a.srcMs)}`)
+  }
+
   // Wheel pans; Ctrl+wheel zooms around the cursor (native listener: React
   // wheel handlers are passive and cannot preventDefault the page scroll).
   useEffect(() => {
@@ -234,6 +247,11 @@ export function Timeline({ app }: { app: AppApi }) {
     const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
     dragRef.current = { kind: 'new', i: -1, el: null, mode: 'move', originX: x, start0: 0, end0: 0, start: 0, end: 0, len: 0, moved: false, x0: x, x1: x, target: null }
     setSelection({ x0: x, x1: x })
+    // preventDefault blocks the browser's default focus change, so move focus
+    // here ourselves. Otherwise a previously focused <input> keeps it and the
+    // global keyboard handler treats every key as "typing" — Delete/Ctrl+C
+    // would silently do nothing.
+    track.focus()
     e.preventDefault()
   }
 
@@ -242,6 +260,9 @@ export function Timeline({ app }: { app: AppApi }) {
     if (!a.project || e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+    // Claim keyboard focus for the timeline so shortcuts work even when the
+    // user was editing a text field a moment ago.
+    el.focus()
     const seg = a.state?.segments?.[i]
     if (!seg) return
     const track = trackRef.current
@@ -309,14 +330,23 @@ export function Timeline({ app }: { app: AppApi }) {
             <Plus className="size-3.5" />
           </Button>
           <span className="w-[30px] text-center font-mono text-xs text-muted-foreground">{app.view.zoom}×</span>
-          <Slider
-            className="w-[110px]"
-            value={[scrollValue]}
-            min={0}
-            max={1000}
-            disabled={maxScroll <= 0}
-            onValueChange={([v]) => panTo(v)}
-          />
+          <div
+            className="inline-flex"
+            title="左键拖动 = 平移视图 · 右键 = 以播放头为中心对齐视图（保持当前缩放）"
+            onContextMenu={(e) => {
+              e.preventDefault()
+              centerOnPlayhead()
+            }}
+          >
+            <Slider
+              className="w-[110px]"
+              value={[scrollValue]}
+              min={0}
+              max={1000}
+              disabled={maxScroll <= 0}
+              onValueChange={([v]) => panTo(v)}
+            />
+          </div>
         </div>
         <span className="font-mono text-xs text-muted-foreground">
           {src ? `可视 ${fmt(Math.round(startMs))} → ${fmt(Math.round(endMs))} / 全长 ${fmt(duration)}` : ''}
@@ -340,7 +370,8 @@ export function Timeline({ app }: { app: AppApi }) {
       <div className="relative">
       <div
         ref={trackRef}
-        className="relative h-[52px] cursor-crosshair overflow-hidden rounded-md border bg-muted"
+        tabIndex={-1}
+        className="relative h-[52px] cursor-crosshair overflow-hidden rounded-md border bg-muted outline-none"
         onMouseDown={onTrackMouseDown}
       >
         <div
@@ -362,7 +393,8 @@ export function Timeline({ app }: { app: AppApi }) {
                 <div
                   key={s.clip_id}
                   data-i={i}
-                  className={`tl-clip pointer-events-auto absolute bottom-0 top-0 z-[3] min-w-[5px] cursor-grab border-x-2 border-blue-700 dark:border-blue-400 bg-blue-600/20 dark:bg-blue-500/20 hover:bg-blue-600/30 dark:hover:bg-blue-500/35 ${
+                  tabIndex={-1}
+                  className={`tl-clip pointer-events-auto absolute bottom-0 top-0 z-[3] min-w-[5px] cursor-grab border-x-2 outline-none border-blue-700 dark:border-blue-400 bg-blue-600/20 dark:bg-blue-500/20 hover:bg-blue-600/30 dark:hover:bg-blue-500/35 ${
                     app.selectedClip === i ? 'bg-blue-600/40 dark:bg-blue-500/40 shadow-[inset_0_0_0_2px_hsl(var(--primary))]' : ''
                   }`}
                   style={{ left: `${left}%`, width: `${width}%` }}

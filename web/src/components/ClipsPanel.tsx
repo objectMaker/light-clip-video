@@ -143,7 +143,8 @@ export function ClipsPanel({ app }: { app: AppApi }) {
               return (
                 <Card
                   key={c.id}
-                  className={`cursor-pointer p-3 shadow-none transition-all hover:border-primary ${
+                  tabIndex={-1}
+                  className={`cursor-pointer p-3 shadow-none outline-none transition-all hover:border-primary ${
                     selected ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : ''
                   } ${dragOver === i ? 'border-green-600 dark:border-green-500 ring-2 ring-green-600/30' : ''} ${
                     dragFrom === i ? 'opacity-45' : ''
@@ -174,8 +175,11 @@ export function ClipsPanel({ app }: { app: AppApi }) {
                     setDragFrom(null)
                     setDragOver(null)
                   }}
-                  onClick={() => {
+                  onClick={(e) => {
                     app.setSelectedClip(i)
+                    // Move focus off any text field so Delete / Ctrl+C etc.
+                    // reach the global shortcut handler.
+                    e.currentTarget.focus()
                     if (s.in_ms !== undefined) app.setVideoSource(s.source_id, s.in_ms / 1000)
                   }}
                 >

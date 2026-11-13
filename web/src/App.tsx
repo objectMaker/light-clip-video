@@ -102,7 +102,11 @@ export default function App() {
         void a.clipboardPaste()
         return
       }
-      if (e.key === 'Delete') {
+      // Both the labelled Delete key and Backspace (what many keyboards/users
+      // mean by "delete"). Backspace is only intercepted when a clip is really
+      // selected, so it never blocks ordinary editing elsewhere.
+      if (e.key === 'Delete' || e.code === 'Delete' || e.key === 'Del' || e.key === 'Backspace') {
+        if (e.key === 'Backspace' && a.selectedClip === null) return
         e.preventDefault()
         void a.clipboardDelete()
         return

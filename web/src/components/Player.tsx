@@ -1,4 +1,5 @@
-import { Pause, Play, RotateCcw, RotateCw, Clapperboard, Film, Volume2 } from 'lucide-react'
+import { useRef } from 'react'
+import { Pause, Play, RotateCcw, RotateCw, Clapperboard, Film, Volume2, VolumeX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -9,6 +10,30 @@ import type { AppApi } from '@/hooks/useAppState'
 
 export function Player({ app }: { app: AppApi }) {
   const srcPath = app.currentSource?.path
+  // Right-click on the volume slider toggles mute and remembers the previous
+  // level, so a second right-click restores exactly what you had.
+  const prevVolumeRef = useRef(100)
+
+  const toggleMute = () => {
+    const el = app.videoRef.current
+    if (app.volume > 0) {
+      prevVolumeRef.current = app.volume
+      app.setVolume(0)
+      if (el) {
+        el.volume = 0
+        el.muted = true
+      }
+      app.notify('已静音 · 右键音量滑块可恢复')
+    } else {
+      const restored = prevVolumeRef.current || 100
+      app.setVolume(restored)
+      if (el) {
+        el.volume = restored / 100
+        el.muted = false
+      }
+      app.notify(`已恢复音量 ${restored}%`)
+    }
+  }
 
   // Subtitle overlay: follow the OUTPUT timeline when a clip is playing,
   // otherwise the source timeline of the current track.
@@ -106,8 +131,15 @@ export function Player({ app }: { app: AppApi }) {
             ))}
           </SelectContent>
         </Select>
-        <label className="flex items-center gap-2 text-xs">
-          <Volume2 className="size-4" />
+        <label
+          className="flex cursor-pointer items-center gap-2 text-xs"
+          title="左键拖动 = 调音量 · 右键 = 静音 / 恢复上次音量"
+          onContextMenu={(e) => {
+            e.preventDefault()
+            toggleMute()
+          }}
+        >
+          {app.volume > 0 ? <Volume2 className="size-4" /> : <VolumeX className="size-4 text-muted-foreground" />}
           <Slider
             className="w-[68px]"
             value={[app.volume]}
