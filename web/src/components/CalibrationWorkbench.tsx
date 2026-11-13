@@ -27,7 +27,7 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
 
   if (!track || !cue || idx === null) {
     return (
-      <div className="rounded-lg border bg-muted/50 px-3.5 py-3 text-sm leading-relaxed text-muted-foreground">
+      <div className="rounded-lg border bg-muted/50 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
         点击下方字幕列表里的任意一句，就能在这里拖动或微调它的时间；开着「单句循环」边听边改最顺手。
       </div>
     )
@@ -96,9 +96,9 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 pb-2">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold">字幕时间校准</span>
+    <div className="flex flex-col gap-1.5 pb-2">
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs font-semibold">字幕时间校准</span>
         <div className="flex-1" />
         <Button variant={app.cueLoopOn ? 'default' : 'outline'} size="sm" onClick={app.toggleCueLoop} title="循环播放当前句，边调边听，立刻看到效果">
           <Repeat className="size-4" />
@@ -110,7 +110,7 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
         </Button>
       </div>
 
-      <div className="flex items-baseline gap-2 text-sm">
+      <div className="flex items-baseline gap-1.5 text-xs">
         <span className="font-semibold">
           第 {idx + 1} 句 / 共 {track.cues.length} 句
         </span>
@@ -122,7 +122,7 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
 
       <div
         ref={tlRef}
-        className="relative h-[54px] touch-none select-none overflow-hidden rounded-lg border bg-muted"
+        className="relative h-[46px] touch-none select-none overflow-hidden rounded-lg border bg-muted"
         title="拖动两端改起/终点，拖动中间整体平移"
       >
         <div
@@ -158,7 +158,7 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         <Button variant="outline" size="sm" onClick={() => app.gotoCueRelative(-1)}>
           <ChevronUp className="size-4" />
           上一句
@@ -167,10 +167,10 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
           <ChevronDown className="size-4" />
           下一句
         </Button>
-        <span className="text-sm text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           步长
           <Select value={String(app.wbStep)} onValueChange={(v) => app.setWbStep(Number(v))}>
-            <SelectTrigger className="mx-1 inline-flex h-9 w-[84px] text-sm">
+            <SelectTrigger className="mx-1 inline-flex h-7 w-[76px] text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -184,7 +184,7 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
           ms（按住 Shift = ×5）
         </span>
       </div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         <Button variant="outline" size="sm" onClick={() => void app.wbShift(-stepMs(), 'start')}>
           起点 −
         </Button>
@@ -198,19 +198,19 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
           终点 ＋
         </Button>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         <Button variant="outline" size="sm" onClick={() => void app.wbShift(-stepMs(), 'both')}>
           整句前移 −
         </Button>
         <Button variant="outline" size="sm" onClick={() => void app.wbShift(stepMs(), 'both')}>
           整句后移 ＋
         </Button>
-        <span className="text-sm text-muted-foreground">整句平移不改时长</span>
+        <span className="text-xs text-muted-foreground">整句平移不改时长</span>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-muted-foreground">起点</span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">起点</span>
         <Input
-          className="h-9 w-[132px] font-mono text-sm"
+          className="h-7 w-[122px] font-mono text-xs"
           inputMode="numeric"
           placeholder="00:00:00.000"
           value={startText}
@@ -219,9 +219,9 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
             if (e.key === 'Enter') applyExact()
           }}
         />
-        <span className="text-sm text-muted-foreground">终点</span>
+        <span className="text-xs text-muted-foreground">终点</span>
         <Input
-          className="h-9 w-[132px] font-mono text-sm"
+          className="h-7 w-[122px] font-mono text-xs"
           inputMode="numeric"
           placeholder="00:00:00.000"
           value={endText}
@@ -234,15 +234,15 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
           应用精确时间
         </Button>
       </div>
-      <div className="flex flex-wrap items-center gap-2 border-t border-dashed pt-2">
-        <span className="text-sm text-muted-foreground">整轨偏移</span>
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-dashed pt-2">
+        <span className="text-xs text-muted-foreground">整轨偏移</span>
         <Input
-          className="h-9 w-[88px] text-sm"
+          className="h-7 w-[80px] text-xs"
           type="number"
           value={app.wbTrackDelta}
           onChange={(e) => app.setWbTrackDelta(Number(e.target.value) || 0)}
         />
-        <span className="text-sm text-muted-foreground">ms</span>
+        <span className="text-xs text-muted-foreground">ms</span>
         <Button
           variant="outline"
           size="sm"

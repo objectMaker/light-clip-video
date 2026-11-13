@@ -128,7 +128,8 @@ cue' = offset + (clamp(cue, in, out) - in)
 - `web/src/index.css` 是**唯一的 CSS 文件**，只放 Tailwind v4 入口、亮/暗两套 CSS 变量、`@theme` 设计令牌（含字号刻度）和少量无法用工具类表达的基础规则（滚动条、选区、全高容器）。组件样式一律写在 TSX 的 Tailwind 工具类里，没有旧的 `style.css` / `app.js` 单文件。
 - **字号单一真源**：`@theme` 里覆盖 `--text-xs` / `--text-sm` / `--text-base` 等令牌。想整体调大或调小字号只改这里，不要再写 `text-[11px]` 之类的任意值。
 - **主题单一真源**：`hooks/useTheme.ts` 用 `useSyncExternalStore` 维护 `light / dark / system`，把 `.dark` 类挂到 `<html>`，写 `localStorage['clip-video.theme.v1']`，并监听系统外观变化；`web/index.html` 的内联脚本在 React 挂载前先刷一次，避免启动时白屏闪烁。新增颜色一律用 `--color-*` 令牌或 `dark:` 变体，不要写死浅色值。
-- 基础控件（`components/ui/*`）集中定义尺寸与焦点态，业务面板只组合它们；`cn()`（clsx + tailwind-merge）负责合并调用方传入的 className。
+- 基础控件（`components/ui/*`）集中定义尺寸与焦点态，业务面板只组合它们；**保持紧凑**，主窗口的垂直空间优先给视频预览，不要整体放大 padding / 控件 / 字号。
+- `lib/clips.ts::snapClipDrag()` 是时间轴拖拽吸边的纯函数：阈值按固定像素（7px）换算成毫秒，吸附点为播放头、源片首尾、其它片段边界；`start`/`end` 模式绝不动另一端，会破坏最短时长或越界的候选直接拒绝，不做静默 clamp。`cn()`（clsx + tailwind-merge）负责合并调用方传入的 className。
 
 ## ffmpeg 调用
 

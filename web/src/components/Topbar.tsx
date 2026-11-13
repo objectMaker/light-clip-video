@@ -30,7 +30,7 @@ function IconAction({
         <Button
           variant="ghost"
           size="icon"
-          className="size-9 text-muted-foreground hover:text-foreground"
+          className="size-8 text-muted-foreground hover:text-foreground"
           onClick={onClick}
           aria-label={label}
           title={hint ? `${label} · ${hint}` : label}
@@ -52,18 +52,18 @@ export function Topbar({ app }: { app: AppApi }) {
   const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor
 
   return (
-    <header className="flex h-16 shrink-0 items-center gap-3 border-b bg-background px-5 shadow-sm">
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4 shadow-sm">
       <div className="flex shrink-0 items-center gap-2.5">
-        <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-          <Clapperboard className="size-5" />
+        <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+          <Clapperboard className="size-4" />
         </div>
         <div className="flex flex-col leading-tight">
-          <span className="text-base font-semibold tracking-tight">Light Clip</span>
+          <span className="text-sm font-semibold tracking-tight">Light Clip</span>
           <span className="text-xs text-muted-foreground">视频字幕剪辑</span>
         </div>
       </div>
 
-      <div className="mx-1 h-7 w-px shrink-0 bg-border" />
+      <div className="mx-1 h-6 w-px shrink-0 bg-border" />
 
       <Button onClick={() => app.setOpenDialog(true)} size="sm" className="shrink-0">
         <FolderOpen className="size-4" />
@@ -78,7 +78,7 @@ export function Topbar({ app }: { app: AppApi }) {
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-muted-foreground">
               <Switch
                 checked={app.snapToCue}
                 onCheckedChange={(v) => {
@@ -103,7 +103,7 @@ export function Topbar({ app }: { app: AppApi }) {
                   app.updateOutput({ mode: m })
                 }}
               >
-                <SelectTrigger className="h-9 w-[196px]" title="导出方式">
+                <SelectTrigger className="h-8 w-[210px]" title="导出方式">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -118,7 +118,7 @@ export function Topbar({ app }: { app: AppApi }) {
           </TooltipContent>
         </Tooltip>
 
-        <div className="mx-1 h-7 w-px shrink-0 bg-border" />
+        <div className="mx-1 h-6 w-px shrink-0 bg-border" />
 
         <div className="flex shrink-0 items-center rounded-lg border bg-muted/40 p-0.5">
           <IconAction label="保存工程" hint="存成 JSON，随时继续编辑" onClick={app.saveProjectFile}>

@@ -4,8 +4,15 @@ import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { thumbUrl, waveformUrl } from '@/api'
 import { fmt, shortFmt } from '@/lib/format'
-import { computeClipDrag } from '@/lib/clips'
+import { computeClipDrag, snapClipDrag, type SnapPoint } from '@/lib/clips'
 import type { AppApi } from '@/hooks/useAppState'
+
+/** "Close enough to snap" is a fixed on-screen distance, independent of zoom. */
+const SNAP_PX = 7
+
+function tipLeftPct(ms: number, viewStart: number, viewSpan: number) {
+  return Math.max(8, Math.min(92, ((ms - viewStart) / viewSpan) * 100))
+}
 
 export function Timeline({ app }: { app: AppApi }) {
   const trackRef = useRef<HTMLDivElement | null>(null)
@@ -13,7 +20,9 @@ export function Timeline({ app }: { app: AppApi }) {
   const appRef = useRef(app)
   appRef.current = app
   const [selection, setSelection] = useState<{ x0: number; x1: number } | null>(null)
-  const [dragTip, setDragTip] = useState<{ x: number; text: string } | null>(null)
+  // The bubble is anchored under the dragged clip (a % of the track width),
+  // not under the mouse cursor.
+  const [dragTip, setDragTip] = useState<{ leftPct: number; text: string } | null>(null)
 
   const src = app.currentSource
   const duration = src?.duration_ms || 1
@@ -128,23 +137,44 @@ export function Timeline({ app }: { app: AppApi }) {
         d.target = Number.isNaN(target as number) ? null : target
         track.querySelectorAll('.tl-clip').forEach((el) => el.classList.toggle('sort-target', Number((el as HTMLElement).dataset.i) === d.target))
         setDragTip({
-          x,
+          leftPct: Math.max(8, Math.min(92, (x / (rect.width || 1)) * 100)),
           text: d.target === null ? `#${d.i + 1} 拖到另一个片段上 = 改变合并顺序` : `#${d.i + 1} → 第 ${(d.target ?? 0) + 1} 位`,
         })
         return
       }
       if (d.kind === 'clip') {
+        const srcDuration = a.currentSource?.duration_ms || 1
         const ms = Math.round(a.view.startMs + (x / (rect.width || 1)) * a.viewSpanMs)
         const originMs = Math.round(a.view.startMs + (d.originX / (rect.width || 1)) * a.viewSpanMs)
-        const next = computeClipDrag({ mode: d.mode, start0: d.start0, end0: d.end0, len: d.len, duration: a.currentSource?.duration_ms || 1 }, ms, originMs)
-        d.start = next.start
-        d.end = next.end
+        const raw = computeClipDrag({ mode: d.mode, start0: d.start0, end0: d.end0, len: d.len, duration: srcDuration }, ms, originMs)
+
+        // Snap targets: the playhead set by a click-to-seek, source bounds,
+        // and every OTHER clip's edges (handy for butt-joining two segments).
+        const points: SnapPoint[] = [
+          { ms: a.srcMs, label: '播放头' },
+          { ms: 0, label: '片头' },
+          { ms: srcDuration, label: '片尾' },
+        ]
+        const otherSegs = a.state?.segments || []
+        otherSegs.forEach((s, i) => {
+          if (i === d.i || s.source_id !== a.currentSource?.id) return
+          points.push({ ms: s.in_ms, label: `片段 ${i + 1} 起点` }, { ms: s.out_ms, label: `片段 ${i + 1} 终点` })
+        })
+        const tolMs = (a.viewSpanMs / (rect.width || 1)) * SNAP_PX
+        const snapped = snapClipDrag(raw, d.mode, points, tolMs, srcDuration)
+
+        d.start = snapped.start
+        d.end = snapped.end
         d.moved = true
         if (d.el) {
           d.el.style.left = ((d.start - a.view.startMs) / a.viewSpanMs) * 100 + '%'
           d.el.style.width = Math.max(0.3, ((d.end - d.start) / a.viewSpanMs) * 100) + '%'
         }
-        setDragTip({ x, text: `#${d.i + 1}  ${fmt(d.start)} → ${fmt(d.end)}  ·  时长 ${fmt(d.end - d.start)}` })
+        const snapNote = snapped.hit ? `  ·  吸到${snapped.hit.label}` : ''
+        setDragTip({
+          leftPct: tipLeftPct((d.start + d.end) / 2, a.view.startMs, a.viewSpanMs),
+          text: `#${d.i + 1}  ${fmt(d.start)} → ${fmt(d.end)}  ·  时长 ${fmt(d.end - d.start)}${snapNote}`,
+        })
         return
       }
       d.x1 = x
@@ -222,7 +252,10 @@ export function Timeline({ app }: { app: AppApi }) {
       dragRef.current = { kind: 'sort', i, el, mode: 'move', originX: x, start0: seg.in_ms, end0: seg.out_ms, start: seg.in_ms, end: seg.out_ms, len: seg.out_ms - seg.in_ms, moved: false, x0: x, x1: x, target: null }
       a.setSelectedClip(i)
       el.classList.add('dragging')
-      setDragTip({ x, text: `#${i + 1} 拖到另一个片段上 = 改变合并顺序` })
+      setDragTip({
+        leftPct: tipLeftPct((seg.in_ms + seg.out_ms) / 2, a.view.startMs, a.viewSpanMs),
+        text: `#${i + 1} 拖到另一个片段上 = 改变合并顺序`,
+      })
       return
     }
     const handle = (e.target as HTMLElement).closest('[data-edge]')
@@ -230,7 +263,10 @@ export function Timeline({ app }: { app: AppApi }) {
     dragRef.current = { kind: 'clip', i, el, mode, originX: x, start0: seg.in_ms, end0: seg.out_ms, start: seg.in_ms, end: seg.out_ms, len: seg.out_ms - seg.in_ms, moved: false, x0: x, x1: x, target: null }
     a.setSelectedClip(i)
     el.classList.add('dragging')
-    setDragTip({ x, text: `#${i + 1}  ${fmt(seg.in_ms)} → ${fmt(seg.out_ms)}  ·  时长 ${fmt(seg.out_ms - seg.in_ms)}` })
+    setDragTip({
+      leftPct: tipLeftPct((seg.in_ms + seg.out_ms) / 2, a.view.startMs, a.viewSpanMs),
+      text: `#${i + 1}  ${fmt(seg.in_ms)} → ${fmt(seg.out_ms)}  ·  时长 ${fmt(seg.out_ms - seg.in_ms)}`,
+    })
   }
 
   const seekFromEvent = (e: React.MouseEvent, el: HTMLElement) => {
@@ -252,29 +288,29 @@ export function Timeline({ app }: { app: AppApi }) {
   const scrollValue = maxScroll > 0 ? Math.round((startMs / maxScroll) * 1000) : 0
 
   return (
-    <section ref={paneRef} className="shrink-0 border-t bg-background px-5 pb-4 pt-3">
-      <div className="mb-2.5 flex items-center gap-4">
-        <div className="text-base font-semibold">时间轴</div>
+    <section ref={paneRef} className="shrink-0 border-t bg-background px-4 pb-3 pt-2.5">
+      <div className="mb-2 flex items-center gap-3.5">
+        <div className="font-medium">时间轴</div>
         <div
-          className="min-w-0 flex-1 truncate text-sm text-muted-foreground"
+          className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
           title="拖拽 = 新建片段 · 拖边缘 = 改单边 · 拖中间 = 平移 · Alt+拖片段 = 改顺序 · 单击 = 定位 · 滚轮 = 平移 · Ctrl+滚轮 = 缩放"
         >
           拖拽 = 新建片段 · 拖边缘 = 改单边 · 拖中间 = 平移 · Alt+拖片段 = 改顺序 · 单击 = 定位 · 滚轮 = 平移 · Ctrl+滚轮 = 缩放
         </div>
         <div className="flex-1" />
         <div className="flex shrink-0 items-center gap-1">
-          <Button variant="outline" size="sm" className="h-8 min-w-[30px] px-2" disabled={app.view.zoom <= 1} onClick={() => zoomBy(-1)} title="缩小，看得更全">
-            <Minus className="size-4" />
+          <Button variant="outline" size="sm" className="h-7 min-w-[26px] px-1.5" disabled={app.view.zoom <= 1} onClick={() => zoomBy(-1)} title="缩小，看得更全">
+            <Minus className="size-3.5" />
           </Button>
-          <Button variant="outline" size="sm" className="h-8 px-2.5" disabled={app.view.zoom === 1 && startMs === 0} onClick={zoomFit} title="恢复显示整片">
+          <Button variant="outline" size="sm" className="h-7 px-2" disabled={app.view.zoom === 1 && startMs === 0} onClick={zoomFit} title="恢复显示整片">
             适应
           </Button>
-          <Button variant="outline" size="sm" className="h-8 min-w-[30px] px-2" disabled={app.view.zoom >= 32} onClick={() => zoomBy(1)} title="放大，选点更精确">
-            <Plus className="size-4" />
+          <Button variant="outline" size="sm" className="h-7 min-w-[26px] px-1.5" disabled={app.view.zoom >= 32} onClick={() => zoomBy(1)} title="放大，选点更精确">
+            <Plus className="size-3.5" />
           </Button>
-          <span className="w-[34px] text-center font-mono text-xs text-muted-foreground">{app.view.zoom}×</span>
+          <span className="w-[30px] text-center font-mono text-xs text-muted-foreground">{app.view.zoom}×</span>
           <Slider
-            className="w-[128px]"
+            className="w-[110px]"
             value={[scrollValue]}
             min={0}
             max={1000}
@@ -287,7 +323,7 @@ export function Timeline({ app }: { app: AppApi }) {
         </span>
       </div>
 
-      <div className="relative mb-1.5 h-5 font-mono text-xs text-muted-foreground">
+      <div className="relative mb-1 h-4 font-mono leading-none text-xs text-muted-foreground">
         {rulerTicks.map((t, i) => (
           <span
             key={i}
@@ -299,9 +335,12 @@ export function Timeline({ app }: { app: AppApi }) {
         ))}
       </div>
 
+      {/* Wrapper is NOT clipped: the drag bubble lives just below the track,
+          aligned with the dragged clip. */}
+      <div className="relative">
       <div
         ref={trackRef}
-        className="relative h-[60px] cursor-crosshair overflow-hidden rounded-lg border bg-muted"
+        className="relative h-[52px] cursor-crosshair overflow-hidden rounded-md border bg-muted"
         onMouseDown={onTrackMouseDown}
       >
         <div
@@ -330,11 +369,11 @@ export function Timeline({ app }: { app: AppApi }) {
                   title={`片段 ${i + 1}  ${fmt(s.in_ms)} → ${fmt(s.out_ms)}（拖两端改单边，拖中间平移）`}
                   onMouseDown={(e) => onClipMouseDown(e, i, e.currentTarget)}
                 >
-                  <span data-edge="start" className="absolute bottom-0 left-[-6px] top-0 w-3 cursor-ew-resize" title="只改起点，终点不动" />
+                  <span data-edge="start" className="absolute bottom-0 left-[-5px] top-0 w-2.5 cursor-ew-resize" title="只改起点，终点不动" />
                   <span className="absolute inset-x-2 flex items-center justify-center overflow-hidden whitespace-nowrap text-xs font-semibold text-blue-900 dark:text-blue-100">
                     {i + 1}
                   </span>
-                  <span data-edge="end" className="absolute bottom-0 right-[-6px] top-0 w-3 cursor-ew-resize" title="只改终点，起点不动" />
+                  <span data-edge="end" className="absolute bottom-0 right-[-5px] top-0 w-2.5 cursor-ew-resize" title="只改终点，起点不动" />
                 </div>
               )
             })}
@@ -349,19 +388,20 @@ export function Timeline({ app }: { app: AppApi }) {
             }}
           />
         )}
-        {dragTip && (
-          <div
-            className="pointer-events-none absolute bottom-1 z-[6] -translate-x-1/2 whitespace-nowrap rounded bg-zinc-900/90 px-2 py-0.5 font-mono text-xs text-white"
-            style={{ left: `${Math.max(90, Math.min(dragTip.x, (trackRef.current?.clientWidth || 1) - 90))}px` }}
-          >
-            {dragTip.text}
-          </div>
-        )}
         <div className="pointer-events-none absolute bottom-0 top-0 z-[5] w-0.5 bg-red-500" style={{ left: `${msToPct(app.srcMs)}%` }} />
+      </div>
+      {dragTip && (
+        <div
+          className="pointer-events-none absolute top-full z-20 mt-1 -translate-x-1/2 whitespace-nowrap rounded bg-zinc-900/90 px-2 py-0.5 font-mono text-xs text-white shadow-md"
+          style={{ left: `${dragTip.leftPct}%` }}
+        >
+          {dragTip.text}
+        </div>
+      )}
       </div>
 
       <div
-        className="relative mt-1 flex h-[38px] items-center overflow-hidden rounded-md bg-blue-50 dark:bg-blue-950/40"
+        className="relative mt-1 flex h-[34px] items-center overflow-hidden rounded-md bg-blue-50 dark:bg-blue-950/40"
         onClick={(e) => {
           if ((e.target as HTMLElement).closest('.cue-block')) return
           seekFromEvent(e, e.currentTarget)
@@ -378,14 +418,14 @@ export function Timeline({ app }: { app: AppApi }) {
         )}
       </div>
 
-      <div className="relative mt-1 h-[34px] overflow-hidden rounded-md bg-muted" onClick={(e) => seekFromEvent(e, e.currentTarget)}>
+      <div className="relative mt-1 h-[30px] overflow-hidden rounded-md bg-muted" onClick={(e) => seekFromEvent(e, e.currentTarget)}>
         {cueBlocks.map(({ c, i }) => {
           const left = msToPct(c.start_ms)
           const width = Math.max(0.4, ((c.end_ms - c.start_ms) / span) * 100)
           return (
             <div
               key={i}
-              className="cue-block absolute top-1 h-[26px] cursor-pointer overflow-hidden whitespace-nowrap rounded border border-amber-700 dark:border-amber-500 bg-amber-300 dark:bg-amber-600/70 px-1.5 py-0.5 text-xs text-amber-950 dark:text-amber-50"
+              className="cue-block absolute top-1 h-[22px] cursor-pointer overflow-hidden whitespace-nowrap rounded border border-amber-700 dark:border-amber-500 bg-amber-300 dark:bg-amber-600/70 px-1 py-0.5 text-xs text-amber-950 dark:text-amber-50"
               style={{ left: `${left}%`, width: `${width}%` }}
               title={c.lines.join(' ')}
               onClick={(e) => {
@@ -400,14 +440,14 @@ export function Timeline({ app }: { app: AppApi }) {
         })}
       </div>
 
-      <div className="mb-1.5 mt-2.5 flex items-center gap-2 text-sm text-muted-foreground">
+      <div className="mb-1 mt-2 flex items-center gap-2 text-xs text-muted-foreground">
         <span className="font-medium text-foreground">成片时间轴</span>
         <span className="font-mono text-xs">
           {app.segments.length ? `${app.segments.length} 段 · 共 ${fmt(app.totalMs)} · 单击定位` : '尚未添加片段'}
         </span>
       </div>
       <div
-        className="relative h-[30px] cursor-pointer overflow-hidden rounded-lg border bg-blue-100/70 dark:bg-blue-950/40"
+        className="relative h-[26px] cursor-pointer overflow-hidden rounded-md border bg-blue-100/70 dark:bg-blue-950/40"
         title="按输出顺序拼接后的成片，单击可跳到该位置"
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect()
@@ -418,7 +458,7 @@ export function Timeline({ app }: { app: AppApi }) {
         {app.outputLane.map((cell) => (
           <div
             key={cell.i}
-            className={`absolute bottom-0.5 top-0.5 overflow-hidden whitespace-nowrap rounded border border-blue-300 dark:border-blue-500/70 text-center text-xs leading-6 ${
+            className={`absolute bottom-0.5 top-0.5 overflow-hidden whitespace-nowrap rounded border border-blue-300 dark:border-blue-500/70 text-center text-xs leading-5 ${
               cell.i % 2 ? 'bg-blue-100 dark:bg-blue-700/70' : 'bg-blue-200 dark:bg-blue-600/70'
             } ${app.followSeg === cell.i ? 'bg-primary text-primary-foreground' : 'text-blue-900 dark:text-blue-100'}`}
             style={{ left: `${cell.left}%`, width: `${cell.width}%` }}

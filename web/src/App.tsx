@@ -71,7 +71,8 @@ export default function App() {
         return
       }
       const target = e.target as HTMLElement | null
-      const typing = target?.tagName === 'INPUT' || target?.tagName === 'SELECT' || target?.isContentEditable
+      const typing =
+        target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT' || target?.isContentEditable
       if (typing) return
       const mod = e.ctrlKey || e.metaKey
       if (mod && (e.key === 'z' || e.key === 'Z')) {
@@ -83,6 +84,27 @@ export default function App() {
       if (mod && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault()
         a.redo()
+        return
+      }
+      // Clipboard shortcuts operate on the clip selected on the timeline.
+      if (mod && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault()
+        a.clipboardCopy()
+        return
+      }
+      if (mod && (e.key === 'x' || e.key === 'X')) {
+        e.preventDefault()
+        void a.clipboardCut()
+        return
+      }
+      if (mod && (e.key === 'v' || e.key === 'V')) {
+        e.preventDefault()
+        void a.clipboardPaste()
+        return
+      }
+      if (e.key === 'Delete') {
+        e.preventDefault()
+        void a.clipboardDelete()
         return
       }
       if (e.code === 'Space') {
@@ -156,11 +178,11 @@ export default function App() {
     <TooltipProvider delayDuration={350}>
       <div className="flex h-full min-w-[900px] flex-col bg-app text-app-foreground transition-colors duration-200">
         <Topbar app={app} />
-        <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.55fr)_minmax(380px,1fr)] gap-4 p-4">
+        <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)] gap-3 p-3">
           <Player app={app} />
           <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
             <Tabs value={app.tab} onValueChange={(v) => app.setTab(v as 'clips' | 'cues' | 'settings')} className="flex min-h-0 flex-1 flex-col">
-              <TabsList className="mx-4 mt-4 grid h-10 grid-cols-3">
+              <TabsList className="mx-3 mt-3 grid h-9 grid-cols-3">
                 <TabsTrigger value="clips" className="gap-1.5">
                   <Scissors className="size-4" />
                   片段
@@ -174,7 +196,7 @@ export default function App() {
                   设置
                 </TabsTrigger>
               </TabsList>
-              <div className="flex min-h-0 flex-1 flex-col p-4 pt-3">
+              <div className="flex min-h-0 flex-1 flex-col p-3">
                 {app.tab === 'clips' && <ClipsPanel app={app} />}
                 {app.tab === 'cues' && <CuesPanel app={app} />}
                 {app.tab === 'settings' && <SettingsPanel app={app} />}
@@ -183,7 +205,7 @@ export default function App() {
           </aside>
         </main>
         <Timeline app={app} />
-        <footer className="flex shrink-0 items-center gap-3 border-t bg-background px-5 py-2.5 text-xs text-muted-foreground">
+        <footer className="flex shrink-0 items-center gap-2 border-t bg-background px-4 py-1.5 text-xs text-muted-foreground">
           <span className="flex min-w-0 items-center gap-2 truncate">
             <span className="size-1.5 shrink-0 rounded-full bg-primary" />
             <span className="truncate">{app.status || '就绪'}</span>

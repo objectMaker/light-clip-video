@@ -13,9 +13,10 @@ import type {
   ServerConfig,
   SrcInfo,
   Boundary,
+  Clip,
 } from '../types'
 import { fmt } from '../lib/format'
-import { advanceOutput, buildOutputLane, copyClip, isWholeFileProject, makeWholeClips, moveClip, outputToSource, renameClip, splitClipAt, timeBoundary } from '../lib/clips'
+import { advanceOutput, buildOutputLane, cloneClip, copyClip, insertClip, isWholeFileProject, makeWholeClips, moveClip, outputToSource, renameClip, splitClipAt, timeBoundary } from '../lib/clips'
 import {
   BASIC_KEYS,
   collectEncode,
@@ -77,6 +78,12 @@ export function useAppState() {
   const [cueEnd, setCueEnd] = useState<number | null>(null)
   const [checked, setChecked] = useState<Set<number>>(new Set())
   const [selectedClip, setSelectedClip] = useState<number | null>(null)
+  // Keyboard actions run from a window-level listener in App.tsx, so they need
+  // the latest selection without re-registering the listener on every render.
+  const selectedClipRef = useRef<number | null>(null)
+  selectedClipRef.current = selectedClip
+  // In-memory clipboard for Ctrl+C / Ctrl+X / Ctrl+V on timeline clips.
+  const clipClipboardRef = useRef<Clip | null>(null)
   const [view, setView] = useState({ startMs: 0, zoom: 1 })
   const [follow, setFollow] = useState(true)
   const [volume, setVolume] = useState(100)
@@ -651,6 +658,50 @@ export function useAppState() {
     },
     [activeSource, syncProject, updateProject],
   )
+
+  // --- Ctrl+C / Ctrl+X / Ctrl+V / Delete on the selected timeline clip -----
+  // Every mutation goes through updateProject (which snapshots for undo) or
+  // the existing clipOp, so all four actions share one undo stack.
+  const clipboardCopy = useCallback(() => {
+    const p = projectRef.current
+    const i = selectedClipRef.current
+    const c = i === null ? null : p?.clips?.[i]
+    if (!p || !c || i === null) return notify('请先选中一个片段')
+    clipClipboardRef.current = cloneClip(c)
+    notify(`已复制片段 ${i + 1} · Ctrl+V 粘贴到选中片段之后`)
+  }, [notify])
+
+  const clipboardCut = useCallback(async () => {
+    const p = projectRef.current
+    const i = selectedClipRef.current
+    const c = i === null ? null : p?.clips?.[i]
+    if (!p || !c || i === null) return notify('请先选中一个片段')
+    clipClipboardRef.current = cloneClip(c)
+    await clipOp(i, 'del')
+    notify(`已剪切片段 ${i + 1} · Ctrl+V 粘贴，Ctrl+Z 可撤销`)
+  }, [clipOp, notify])
+
+  const clipboardPaste = useCallback(async () => {
+    const src = clipClipboardRef.current
+    if (!src) return notify('剪贴板为空：先用 Ctrl+C 或 Ctrl+X 复制片段')
+    const p = projectRef.current
+    if (!p) return
+    const i = selectedClipRef.current
+    const at = i === null ? (p.clips || []).length : Math.min(i + 1, (p.clips || []).length)
+    updateProject((proj) => ({
+      ...proj,
+      clips: insertClip(proj.clips || [], src, i === null ? (proj.clips || []).length : i + 1),
+    }))
+    setSelectedClip(at)
+    await syncProject(true)
+    notify(`已粘贴片段到第 ${at + 1} 位 · Ctrl+Z 可撤销`)
+  }, [notify, syncProject, updateProject])
+
+  const clipboardDelete = useCallback(async () => {
+    const i = selectedClipRef.current
+    if (i === null) return notify('请先选中一个片段')
+    await clipOp(i, 'del')
+  }, [clipOp, notify])
 
   const renameClipAt = useCallback(
     async (i: number, label: string) => {
@@ -1551,6 +1602,7 @@ export function useAppState() {
     setVideoSource, seekToMs, seekOutput, playWhenReady, togglePlay, nudge, startOutputPreview, onVideoTime,
     undo, redo, updateProject,
     addTimeClip, commitClipDrag, clipOp, renameClipAt, commitTimeInput, moveClipOrder,
+    clipboardCopy, clipboardCut, clipboardPaste, clipboardDelete,
     applyWholeClips, clearClips,
     selectCue, visibleCueIndices, addClipsFromEndpoints, addClipsFromChecked,
     wbShift, wbSetExact, wbShiftWholeTrack, wbReload, toggleCueLoop, gotoCueRelative,

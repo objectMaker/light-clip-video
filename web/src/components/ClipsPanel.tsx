@@ -32,7 +32,7 @@ function ClipTimeInput({
   const [error, setError] = useState(false)
   return (
     <Input
-      className={`h-9 w-[132px] font-mono text-xs ${error ? 'border-destructive' : ''}`}
+      className={`h-8 w-[120px] font-mono text-xs ${error ? 'border-destructive' : ''}`}
       value={value}
       onChange={(e) => {
         setValue(e.target.value)
@@ -99,11 +99,11 @@ export function ClipsPanel({ app }: { app: AppApi }) {
         </Select>
         <div className="flex-1" />
         <Button variant="outline" size="sm" disabled={!app.canUndo} onClick={app.undo} title="撤销（Ctrl+Z）">
-          <Undo2 className="size-4" />
+          <Undo2 className="size-3.5" />
           撤销
         </Button>
         <Button variant="outline" size="sm" disabled={!app.canRedo} onClick={app.redo} title="重做（Ctrl+Shift+Z）">
-          <Redo2 className="size-4" />
+          <Redo2 className="size-3.5" />
           重做
         </Button>
         <Button variant="outline" size="sm" onClick={() => void app.applyWholeClips()} title="每个视频生成 0 → 全长的片段，只压缩不剪辑">
@@ -114,7 +114,7 @@ export function ClipsPanel({ app }: { app: AppApi }) {
         </Button>
       </div>
 
-      <div className="mb-2 rounded-lg border bg-muted/50 px-3.5 py-2.5 text-sm leading-relaxed text-muted-foreground">
+      <div className="mb-2 rounded-lg border bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
         <b className="text-foreground">怎么剪：</b>在时间轴空白处拖拽新建片段；拖片段两端只改起 / 终点，拖中间整体平移。
         卡片上 <Scissors className="inline size-3.5" /> 在播放头处拆分、<Copy className="inline size-3.5" /> 复制、
         <Pencil className="inline size-3.5" /> 重命名；<b className="text-foreground">直接拖动卡片可改顺序</b>。
@@ -122,12 +122,12 @@ export function ClipsPanel({ app }: { app: AppApi }) {
 
       <ScrollArea className="min-h-0 flex-1">
         {!clips.length ? (
-          <div className="flex flex-col items-center gap-3 px-4 py-12 text-center text-muted-foreground">
-            <div className="flex size-14 items-center justify-center rounded-full bg-muted">
-              <Film className="size-7 text-muted-foreground/60" />
+          <div className="flex flex-col items-center gap-2 px-2 py-8 text-center text-muted-foreground">
+            <div className="flex size-10 items-center justify-center rounded-full bg-muted">
+              <Film className="size-6 text-muted-foreground/60" />
             </div>
-            <div className="text-base font-medium text-foreground">还没有片段</div>
-            <p className="max-w-[280px] text-sm leading-relaxed">
+            <div className="text-sm font-medium text-foreground">还没有片段</div>
+            <p className="max-w-[260px] text-xs leading-relaxed">
               在下方时间轴空白处拖拽框选一段，或到「字幕」页按字幕行选点。只想压缩、不剪辑的话可以直接用下面这个按钮。
             </p>
             <Button variant="outline" size="sm" className="mt-1" onClick={() => void app.applyWholeClips()}>
@@ -135,7 +135,7 @@ export function ClipsPanel({ app }: { app: AppApi }) {
             </Button>
           </div>
         ) : (
-          <div className="flex flex-col gap-2.5 pr-2">
+          <div className="flex flex-col gap-2 pr-1">
             {clips.map((c, i) => {
               const s = segs[i] || {}
               const shift = s.keyframe_shift_ms || 0
@@ -143,7 +143,7 @@ export function ClipsPanel({ app }: { app: AppApi }) {
               return (
                 <Card
                   key={c.id}
-                  className={`cursor-pointer p-3.5 shadow-none transition-all hover:border-primary ${
+                  className={`cursor-pointer p-3 shadow-none transition-all hover:border-primary ${
                     selected ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : ''
                   } ${dragOver === i ? 'border-green-600 dark:border-green-500 ring-2 ring-green-600/30' : ''} ${
                     dragFrom === i ? 'opacity-45' : ''
@@ -193,32 +193,32 @@ export function ClipsPanel({ app }: { app: AppApi }) {
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-8" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'up') }}>
-                              <ArrowUp className="size-4" />
+                            <Button variant="ghost" size="icon" className="size-7" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'up') }}>
+                              <ArrowUp className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>上移</TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-8" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'down') }}>
-                              <ArrowDown className="size-4" />
+                            <Button variant="ghost" size="icon" className="size-7" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'down') }}>
+                              <ArrowDown className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>下移</TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-8" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'split') }}>
-                              <Scissors className="size-4" />
+                            <Button variant="ghost" size="icon" className="size-7" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'split') }}>
+                              <Scissors className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>在播放头处拆分（播放头不在片段内则取中点）</TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-8" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'copy') }}>
-                              <Copy className="size-4" />
+                            <Button variant="ghost" size="icon" className="size-7" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'copy') }}>
+                              <Copy className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>复制这个片段</TooltipContent>
@@ -228,7 +228,7 @@ export function ClipsPanel({ app }: { app: AppApi }) {
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="size-8"
+                              className="size-7"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 app.setPromptReq({
@@ -239,15 +239,15 @@ export function ClipsPanel({ app }: { app: AppApi }) {
                                 })
                               }}
                             >
-                              <Pencil className="size-4" />
+                              <Pencil className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>重命名</TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-8 hover:text-destructive" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'del') }}>
-                              <X className="size-4" />
+                            <Button variant="ghost" size="icon" className="size-7 hover:text-destructive" onClick={(e) => { e.stopPropagation(); void app.clipOp(i, 'del') }}>
+                              <X className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>删除</TooltipContent>
@@ -255,7 +255,7 @@ export function ClipsPanel({ app }: { app: AppApi }) {
                       </TooltipProvider>
                     </span>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2.5 text-sm text-muted-foreground">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>
                       输出 {fmt(s.offset_ms)} · 时长 {fmt(s.duration_ms)}
                     </span>
@@ -272,7 +272,7 @@ export function ClipsPanel({ app }: { app: AppApi }) {
                     )}
                   </div>
                   <div
-                    className="mt-2.5 flex items-center gap-2 border-t border-dashed pt-2.5 text-sm text-muted-foreground"
+                    className="mt-2 flex items-center gap-1.5 border-t border-dashed pt-2 text-xs text-muted-foreground"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <span>起点</span>

@@ -38,6 +38,23 @@ export function copyClip(clips: Clip[], i: number): Clip[] | null {
   return out
 }
 
+/** Deep copy with a fresh id, for the Ctrl+C / Ctrl+V clipboard. The original
+ * clip keeps its Boundary expressions (time OR cue anchor) and track ids, so
+ * a pasted segment still follows subtitle edits. */
+export function cloneClip(clip: Clip): Clip {
+  const out = JSON.parse(JSON.stringify(clip)) as Clip
+  out.id = uid()
+  return out
+}
+
+/** Insert at `at` (clamped to 0..length). Used by paste: after the selected
+ * clip, or appended to the end when nothing is selected. */
+export function insertClip(clips: Clip[], clip: Clip, at: number): Clip[] {
+  const out = clips.slice()
+  out.splice(Math.max(0, Math.min(at, out.length)), 0, cloneClip(clip))
+  return out
+}
+
 export function renameClip(clips: Clip[], i: number, label: string): Clip[] | null {
   if (!clips[i]) return null
   const out = JSON.parse(JSON.stringify(clips)) as Clip[]
@@ -154,6 +171,68 @@ export function computeClipDrag(d: ClipDragState, ms: number, originMs: number) 
   if (d.mode === 'end') return { start: d.start0, end: clamp(ms, d.start0 + 100, d.duration) }
   const ns = clamp(d.start0 + delta, 0, d.duration - d.len)
   return { start: ns, end: ns + d.len }
+}
+
+export interface SnapPoint {
+  ms: number
+  label: string
+}
+
+export interface SnapOutcome {
+  start: number
+  end: number
+  /** null = no snap point was close enough. */
+  hit: SnapPoint | null
+}
+
+/**
+ * Pull a dragged clip edge onto a nearby snap point (playhead, another clip's
+ * edge, or the source bounds). Only fires within `tolMs`, which the timeline
+ * derives from a fixed pixel distance so "close" means close ON SCREEN at any
+ * zoom level. 'start'/'end' modes never move the opposite edge; 'move' keeps
+ * the clip length. A candidate that would break min-length or source bounds is
+ * rejected outright rather than clamped (clamping would silently un-snap it).
+ */
+export function snapClipDrag(
+  next: { start: number; end: number },
+  mode: 'start' | 'end' | 'move',
+  points: SnapPoint[],
+  tolMs: number,
+  duration: number,
+): SnapOutcome {
+  const minLen = 100
+  const len = next.end - next.start
+  const plain: SnapOutcome = { start: next.start, end: next.end, hit: null }
+  if (tolMs <= 0 || !points.length) return plain
+
+  const edges: ('start' | 'end')[] = mode === 'move' ? ['start', 'end'] : [mode]
+  let best: { dist: number; edge: 'start' | 'end'; point: SnapPoint } | null = null
+  for (const edge of edges) {
+    for (const p of points) {
+      if (!Number.isFinite(p.ms)) continue
+      const dist = Math.abs(next[edge] - p.ms)
+      if (dist <= tolMs && (!best || dist < best.dist)) best = { dist, edge, point: p }
+    }
+  }
+  if (!best) return plain
+
+  let { start, end } = next
+  if (mode === 'start') {
+    start = best.point.ms
+    if (start < 0 || end - start < minLen) return plain
+  } else if (mode === 'end') {
+    end = best.point.ms
+    if (end > duration || end - start < minLen) return plain
+  } else if (best.edge === 'start') {
+    start = best.point.ms
+    end = start + len
+    if (start < 0 || end > duration) return plain
+  } else {
+    end = best.point.ms
+    start = end - len
+    if (start < 0 || end > duration) return plain
+  }
+  return { start, end, hit: best.point }
 }
 
 /** Window around a cue for the calibration mini-timeline. */
