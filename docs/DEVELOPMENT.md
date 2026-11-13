@@ -49,12 +49,13 @@ cd web && npm run dev                         :: 前端开发服务（代理 /ap
 
 1. **`core/`**：先写纯逻辑 + 单测。任何涉及时间轴、字幕、命名、参数检查的规则都应该落在这里，而不是塞进 HTTP 层或前端。
 2. **`clip-server/`**：如果是新能力，加一个 `/api/*` 路由调用 core；涉及进程的放到 `ffmpeg.rs`。
-3. **`web/`**：前端 `fetch` 新接口、渲染。
+3. **`web/`**：前端 `fetch` 新接口、渲染。样式只写 Tailwind 工具类；新增语义色去 `src/index.css` 的 `@theme` 加令牌，深色适配用 `dark:`，字号用 `text-xs` / `text-sm` / `text-base` 等语义类。
 
 **不要做的事**：
 - 不要在 `clip-server` 里重复实现 core 已有的规则（尺寸预估、警告、命名编号等）。
 - 不要为了某个导出问题去「回读视频再补偿字幕」——这违反单一坐标系，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 - 不要让前端自己算字幕时间或导出路径；后端返回什么就用什么。
+- 不要新增独立的 `.css` 文件，也不要在组件里写 `text-[11px]` 这类硬编码字号；统一改 `src/index.css` 的字号令牌。
 
 ## 测试
 

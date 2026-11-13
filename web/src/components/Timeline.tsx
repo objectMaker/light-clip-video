@@ -252,26 +252,29 @@ export function Timeline({ app }: { app: AppApi }) {
   const scrollValue = maxScroll > 0 ? Math.round((startMs / maxScroll) * 1000) : 0
 
   return (
-    <section ref={paneRef} className="shrink-0 border-t bg-background px-4 pb-3 pt-2.5">
-      <div className="mb-2 flex items-center gap-3.5">
-        <div className="font-medium">时间轴</div>
-        <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+    <section ref={paneRef} className="shrink-0 border-t bg-background px-5 pb-4 pt-3">
+      <div className="mb-2.5 flex items-center gap-4">
+        <div className="text-base font-semibold">时间轴</div>
+        <div
+          className="min-w-0 flex-1 truncate text-sm text-muted-foreground"
+          title="拖拽 = 新建片段 · 拖边缘 = 改单边 · 拖中间 = 平移 · Alt+拖片段 = 改顺序 · 单击 = 定位 · 滚轮 = 平移 · Ctrl+滚轮 = 缩放"
+        >
           拖拽 = 新建片段 · 拖边缘 = 改单边 · 拖中间 = 平移 · Alt+拖片段 = 改顺序 · 单击 = 定位 · 滚轮 = 平移 · Ctrl+滚轮 = 缩放
         </div>
         <div className="flex-1" />
         <div className="flex shrink-0 items-center gap-1">
-          <Button variant="outline" size="sm" className="h-7 min-w-[26px] px-1.5" disabled={app.view.zoom <= 1} onClick={() => zoomBy(-1)} title="缩小，看得更全">
-            <Minus className="size-3.5" />
+          <Button variant="outline" size="sm" className="h-8 min-w-[30px] px-2" disabled={app.view.zoom <= 1} onClick={() => zoomBy(-1)} title="缩小，看得更全">
+            <Minus className="size-4" />
           </Button>
-          <Button variant="outline" size="sm" className="h-7 px-2" disabled={app.view.zoom === 1 && startMs === 0} onClick={zoomFit} title="恢复显示整片">
+          <Button variant="outline" size="sm" className="h-8 px-2.5" disabled={app.view.zoom === 1 && startMs === 0} onClick={zoomFit} title="恢复显示整片">
             适应
           </Button>
-          <Button variant="outline" size="sm" className="h-7 min-w-[26px] px-1.5" disabled={app.view.zoom >= 32} onClick={() => zoomBy(1)} title="放大，选点更精确">
-            <Plus className="size-3.5" />
+          <Button variant="outline" size="sm" className="h-8 min-w-[30px] px-2" disabled={app.view.zoom >= 32} onClick={() => zoomBy(1)} title="放大，选点更精确">
+            <Plus className="size-4" />
           </Button>
-          <span className="w-[30px] text-center font-mono text-[11px] text-muted-foreground">{app.view.zoom}×</span>
+          <span className="w-[34px] text-center font-mono text-xs text-muted-foreground">{app.view.zoom}×</span>
           <Slider
-            className="w-[110px]"
+            className="w-[128px]"
             value={[scrollValue]}
             min={0}
             max={1000}
@@ -279,14 +282,18 @@ export function Timeline({ app }: { app: AppApi }) {
             onValueChange={([v]) => panTo(v)}
           />
         </div>
-        <span className="font-mono text-[11px] text-muted-foreground">
+        <span className="font-mono text-xs text-muted-foreground">
           {src ? `可视 ${fmt(Math.round(startMs))} → ${fmt(Math.round(endMs))} / 全长 ${fmt(duration)}` : ''}
         </span>
       </div>
 
-      <div className="relative mb-1 h-4 font-mono text-[11px] text-muted-foreground">
+      <div className="relative mb-1.5 h-5 font-mono text-xs text-muted-foreground">
         {rulerTicks.map((t, i) => (
-          <span key={i} className="absolute -translate-x-1/2" style={{ left: `${t.left}%` }}>
+          <span
+            key={i}
+            className={`absolute ${i === 0 ? 'translate-x-0' : i === rulerTicks.length - 1 ? '-translate-x-full' : '-translate-x-1/2'}`}
+            style={{ left: `${t.left}%` }}
+          >
             {t.label}
           </span>
         ))}
@@ -294,7 +301,7 @@ export function Timeline({ app }: { app: AppApi }) {
 
       <div
         ref={trackRef}
-        className="relative h-[52px] cursor-crosshair overflow-hidden rounded-md border bg-muted"
+        className="relative h-[60px] cursor-crosshair overflow-hidden rounded-lg border bg-muted"
         onMouseDown={onTrackMouseDown}
       >
         <div
@@ -316,18 +323,18 @@ export function Timeline({ app }: { app: AppApi }) {
                 <div
                   key={s.clip_id}
                   data-i={i}
-                  className={`tl-clip pointer-events-auto absolute bottom-0 top-0 z-[3] min-w-[5px] cursor-grab border-x-2 border-blue-700 bg-blue-600/20 hover:bg-blue-600/30 ${
-                    app.selectedClip === i ? 'bg-blue-600/40 shadow-[inset_0_0_0_2px_hsl(var(--primary))]' : ''
+                  className={`tl-clip pointer-events-auto absolute bottom-0 top-0 z-[3] min-w-[5px] cursor-grab border-x-2 border-blue-700 dark:border-blue-400 bg-blue-600/20 dark:bg-blue-500/20 hover:bg-blue-600/30 dark:hover:bg-blue-500/35 ${
+                    app.selectedClip === i ? 'bg-blue-600/40 dark:bg-blue-500/40 shadow-[inset_0_0_0_2px_hsl(var(--primary))]' : ''
                   }`}
                   style={{ left: `${left}%`, width: `${width}%` }}
                   title={`片段 ${i + 1}  ${fmt(s.in_ms)} → ${fmt(s.out_ms)}（拖两端改单边，拖中间平移）`}
                   onMouseDown={(e) => onClipMouseDown(e, i, e.currentTarget)}
                 >
-                  <span data-edge="start" className="absolute bottom-0 left-[-5px] top-0 w-2.5 cursor-ew-resize" title="只改起点，终点不动" />
-                  <span className="absolute inset-x-2 flex items-center justify-center overflow-hidden whitespace-nowrap text-[11px] font-semibold text-blue-900">
+                  <span data-edge="start" className="absolute bottom-0 left-[-6px] top-0 w-3 cursor-ew-resize" title="只改起点，终点不动" />
+                  <span className="absolute inset-x-2 flex items-center justify-center overflow-hidden whitespace-nowrap text-xs font-semibold text-blue-900 dark:text-blue-100">
                     {i + 1}
                   </span>
-                  <span data-edge="end" className="absolute bottom-0 right-[-5px] top-0 w-2.5 cursor-ew-resize" title="只改终点，起点不动" />
+                  <span data-edge="end" className="absolute bottom-0 right-[-6px] top-0 w-3 cursor-ew-resize" title="只改终点，起点不动" />
                 </div>
               )
             })}
@@ -344,7 +351,7 @@ export function Timeline({ app }: { app: AppApi }) {
         )}
         {dragTip && (
           <div
-            className="pointer-events-none absolute bottom-1 z-[6] -translate-x-1/2 whitespace-nowrap rounded bg-zinc-900/90 px-2 py-0.5 font-mono text-[11px] text-white"
+            className="pointer-events-none absolute bottom-1 z-[6] -translate-x-1/2 whitespace-nowrap rounded bg-zinc-900/90 px-2 py-0.5 font-mono text-xs text-white"
             style={{ left: `${Math.max(90, Math.min(dragTip.x, (trackRef.current?.clientWidth || 1) - 90))}px` }}
           >
             {dragTip.text}
@@ -354,7 +361,7 @@ export function Timeline({ app }: { app: AppApi }) {
       </div>
 
       <div
-        className="relative mt-1 flex h-[34px] items-center overflow-hidden rounded-md bg-blue-50"
+        className="relative mt-1 flex h-[38px] items-center overflow-hidden rounded-md bg-blue-50 dark:bg-blue-950/40"
         onClick={(e) => {
           if ((e.target as HTMLElement).closest('.cue-block')) return
           seekFromEvent(e, e.currentTarget)
@@ -371,14 +378,14 @@ export function Timeline({ app }: { app: AppApi }) {
         )}
       </div>
 
-      <div className="relative mt-1 h-[30px] overflow-hidden rounded-md bg-muted" onClick={(e) => seekFromEvent(e, e.currentTarget)}>
+      <div className="relative mt-1 h-[34px] overflow-hidden rounded-md bg-muted" onClick={(e) => seekFromEvent(e, e.currentTarget)}>
         {cueBlocks.map(({ c, i }) => {
           const left = msToPct(c.start_ms)
           const width = Math.max(0.4, ((c.end_ms - c.start_ms) / span) * 100)
           return (
             <div
               key={i}
-              className="cue-block absolute top-1 h-[22px] cursor-pointer overflow-hidden whitespace-nowrap rounded border border-amber-700 bg-amber-300 px-1 py-0.5 text-[11px] text-amber-950"
+              className="cue-block absolute top-1 h-[26px] cursor-pointer overflow-hidden whitespace-nowrap rounded border border-amber-700 dark:border-amber-500 bg-amber-300 dark:bg-amber-600/70 px-1.5 py-0.5 text-xs text-amber-950 dark:text-amber-50"
               style={{ left: `${left}%`, width: `${width}%` }}
               title={c.lines.join(' ')}
               onClick={(e) => {
@@ -393,14 +400,14 @@ export function Timeline({ app }: { app: AppApi }) {
         })}
       </div>
 
-      <div className="mb-1 mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span>成片时间轴</span>
-        <span className="font-mono text-[10px]">
+      <div className="mb-1.5 mt-2.5 flex items-center gap-2 text-sm text-muted-foreground">
+        <span className="font-medium text-foreground">成片时间轴</span>
+        <span className="font-mono text-xs">
           {app.segments.length ? `${app.segments.length} 段 · 共 ${fmt(app.totalMs)} · 单击定位` : '尚未添加片段'}
         </span>
       </div>
       <div
-        className="relative h-[26px] cursor-pointer overflow-hidden rounded-md border bg-blue-100/70"
+        className="relative h-[30px] cursor-pointer overflow-hidden rounded-lg border bg-blue-100/70 dark:bg-blue-950/40"
         title="按输出顺序拼接后的成片，单击可跳到该位置"
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect()
@@ -411,9 +418,9 @@ export function Timeline({ app }: { app: AppApi }) {
         {app.outputLane.map((cell) => (
           <div
             key={cell.i}
-            className={`absolute bottom-0.5 top-0.5 overflow-hidden whitespace-nowrap rounded border border-blue-300 text-center text-[10px] leading-5 ${
-              cell.i % 2 ? 'bg-blue-100' : 'bg-blue-200'
-            } ${app.followSeg === cell.i ? 'bg-primary text-white' : 'text-blue-900'}`}
+            className={`absolute bottom-0.5 top-0.5 overflow-hidden whitespace-nowrap rounded border border-blue-300 dark:border-blue-500/70 text-center text-xs leading-6 ${
+              cell.i % 2 ? 'bg-blue-100 dark:bg-blue-700/70' : 'bg-blue-200 dark:bg-blue-600/70'
+            } ${app.followSeg === cell.i ? 'bg-primary text-primary-foreground' : 'text-blue-900 dark:text-blue-100'}`}
             style={{ left: `${cell.left}%`, width: `${cell.width}%` }}
             title={`片段 ${cell.i + 1} · 输出 ${fmt(cell.offset_ms)}`}
           >

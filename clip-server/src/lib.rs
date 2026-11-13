@@ -880,15 +880,61 @@ fn reveal_path(path: &str, dry_run: bool) -> Result<Value, String> {
     Ok(json!({ "ok": true, "opened": target }))
 }
 
+/// Walk up to the closest directory that actually exists.
+///
+/// The folder picker used to open on `default_dir` (`<片名>_剪辑`), which is
+/// only created AT EXPORT TIME. `browse()` then returned 500 and the dialog
+/// opened empty with a "浏览失败" toast. Falling back to the nearest existing
+/// ancestor keeps the picker usable in that very common case.
+fn nearest_existing_dir(p: &str) -> Option<String> {
+    if p.trim().is_empty() {
+        return None;
+    }
+    let mut cur = PathBuf::from(p);
+    loop {
+        if cur.is_dir() {
+            return Some(clean_abs(&cur.to_string_lossy()));
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+fn valid_dir_name(name: &str) -> bool {
+    if name.is_empty() || name.chars().any(|c| "\\/:*?\"<>|".contains(c)) {
+        return false;
+    }
+    // "." / "..", trailing dots or spaces are all rejected by Windows.
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || name.ends_with(' ')
+        || name.ends_with('.')
+    {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    !RESERVED.contains(&stem.as_str())
+}
+
 fn mkdir(body: &Value) -> Result<Value, String> {
     let parent = body.get("parent").and_then(|v| v.as_str()).unwrap_or("");
+    if parent.trim().is_empty() {
+        return Err("请先进入一个盘符或文件夹，再新建子文件夹".into());
+    }
     let parent_abs = clean_abs(parent);
-    if parent_abs.is_empty() || !Path::new(&parent_abs).is_dir() {
+    if !Path::new(&parent_abs).is_dir() {
         return Err(format!("父目录不存在: {parent_abs}"));
     }
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    if name.is_empty() || name.chars().any(|c| "\\/:*?\"<>|".contains(c)) {
-        return Err("文件夹名称为空或含有非法字符".into());
+    if !valid_dir_name(&name) {
+        return Err("文件夹名称为空、含非法字符，或是系统保留名（如 CON / .. / 尾部空格）".into());
     }
     let created = Path::new(&parent_abs).join(&name);
     std::fs::create_dir_all(&created).map_err(|e| e.to_string())?;
@@ -904,12 +950,21 @@ fn browse(directory: &str, kind: &str) -> Result<Value, String> {
                 entries.push(json!({ "name": d, "path": d, "is_dir": true, "size": 0 }));
             }
         }
-        return Ok(json!({ "path": "", "parent": Value::Null, "entries": entries }));
+        return Ok(json!({ "path": "", "parent": Value::Null, "entries": entries, "notice": "" }));
     }
-    let dir_abs = clean_abs(directory);
-    if !Path::new(&dir_abs).is_dir() {
-        return Err(format!("目录不存在: {dir_abs}"));
-    }
+    let requested = clean_abs(directory);
+    let mut notice = String::new();
+    let dir_abs = if Path::new(&requested).is_dir() {
+        requested.clone()
+    } else {
+        match nearest_existing_dir(&requested) {
+            Some(p) => {
+                notice = format!("「{}」尚不存在，已定位到最近存在的上级文件夹。", requested);
+                p
+            }
+            None => return Err(format!("目录不存在，且找不到有效的上级文件夹: {requested}")),
+        }
+    };
     let stripped = dir_abs.trim_end_matches(['\\', '/']);
     let parent_raw = Path::new(stripped)
         .parent()
@@ -965,7 +1020,7 @@ fn browse(directory: &str, kind: &str) -> Result<Value, String> {
             entries.push(json!({ "name": name, "path": full.to_string_lossy(), "is_dir": is_dir, "size": size }));
         }
     }
-    Ok(json!({ "path": dir_abs, "parent": parent, "entries": entries }))
+    Ok(json!({ "path": dir_abs, "parent": parent, "entries": entries, "notice": notice }))
 }
 
 fn parse_mode(s: &str) -> ExportMode {
@@ -1604,5 +1659,42 @@ mod tests {
     #[test]
     fn reveal_path_with_quote_is_rejected_not_fallback() {
         assert!(explorer_args(true, "C:\\bad\"path\\video.mp4").is_err());
+    }
+
+    #[test]
+    fn dir_name_rejects_bad_windows_names() {
+        assert!(valid_dir_name("剪辑"));
+        assert!(valid_dir_name("my folder 2"));
+        assert!(!valid_dir_name(""));
+        assert!(!valid_dir_name("."));
+        assert!(!valid_dir_name(".."));
+        assert!(!valid_dir_name("a/b"));
+        assert!(!valid_dir_name("a:b"));
+        assert!(!valid_dir_name("CON"));
+        assert!(!valid_dir_name("com1.txt"));
+        assert!(!valid_dir_name("name "));
+        assert!(!valid_dir_name("name."));
+    }
+
+    #[test]
+    fn browse_falls_back_to_nearest_existing_ancestor() {
+        // This is the exact shape of the default export folder: it does not
+        // exist until the export actually runs.
+        let base = std::env::temp_dir().join(format!("clipvideo_browse_{}", std::process::id()));
+        let existing = base.join("exists");
+        std::fs::create_dir_all(&existing).unwrap();
+        let missing = existing.join("new_folder").join("deeper");
+        let expected = clean_abs(&existing.to_string_lossy());
+        assert_eq!(nearest_existing_dir(&missing.to_string_lossy()), Some(expected.clone()));
+        let r = browse(&missing.to_string_lossy(), "dir").unwrap();
+        assert_eq!(r["path"].as_str(), Some(expected.as_str()));
+        assert!(r["notice"].as_str().unwrap_or("").contains("尚不存在"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn mkdir_without_parent_has_a_helpful_error() {
+        let err = mkdir(&json!({ "parent": "", "name": "剪辑" })).unwrap_err();
+        assert!(err.contains("请先进入"));
     }
 }

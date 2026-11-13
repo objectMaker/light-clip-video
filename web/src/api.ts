@@ -50,7 +50,7 @@ export const apiClient = {
   extractSubtitle: (body: { path: string; stream_index: number; source_id: string }) =>
     post<ProjectAndState & { track_id: string; path: string; reused: boolean }>('/api/subtitles/extract', body),
   browse: (dir: string, kind: 'all' | 'video' | 'sub' | 'dir') =>
-    api<{ path: string; parent: string; entries: BrowseEntry[] }>(`/api/browse?${q({ dir, kind })}`),
+    api<{ path: string; parent: string; entries: BrowseEntry[]; notice?: string }>(`/api/browse?${q({ dir, kind })}`),
   encodeParams: (path: string) => api<SrcInfo>(`/api/encode-params?${q({ path })}`),
   exportDefault: (dir: string, name: string, overwrite: boolean) =>
     api<ExportTarget>(`/api/export/default?${q({ dir, name, overwrite: overwrite ? 1 : 0 })}`),

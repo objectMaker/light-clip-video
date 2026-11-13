@@ -3,7 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>clip-video · 视频与字幕同步剪辑</title>
+    <title>Light Clip Video · 视频与字幕同步剪辑</title>
+    <script>
+      // Paint the saved theme before React mounts so the window never flashes
+      // white on startup. useTheme.ts re-applies the same value on mount.
+      (function () {
+        try {
+          var t = localStorage.getItem('clip-video.theme.v1') || 'system';
+          var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

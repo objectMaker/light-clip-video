@@ -55,7 +55,7 @@
 | `/assets/*` 等静态文件 | — | Vite 构建产物（JS / CSS / 图标），由内嵌服务直接提供 |
 | `/api/project` | — | `{project, state}` |
 | `/api/project/recover` | — | 磁盘快照 `{project, state, saved_at, file}`，没有则 `{project:null}` |
-| `/api/browse` | `dir`,`kind`(`all`/`video`/`sub`/`dir`) | `{path, parent, entries:[{name,path,is_dir,size}]}`；`dir` 空时列盘符 |
+| `/api/browse` | `dir`,`kind`(`all`/`video`/`sub`/`dir`) | `{path, parent, entries:[{name,path,is_dir,size}], notice}`；`dir` 空时列盘符。请求的目录尚不存在时，自动回退到最近存在的上级目录并置 `notice`，不再返回 500（默认导出文件夹 `<片名>_剪辑` 在导出前不存在） |
 | `/api/config` | — | `{ffmpeg, ffprobe, outdir, cwd}` |
 | `/api/profiles` | — | `{profiles:[...], ...}`：三档方案目录（标签、人话摘要、原始命令） |
 | `/api/export/default` | `dir`,`name`,`overwrite`(`1`/`true`) | 导出目标映射（见下） |

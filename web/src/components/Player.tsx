@@ -1,4 +1,4 @@
-import { Pause, Play, RotateCcw, RotateCw, Clapperboard, Volume2 } from 'lucide-react'
+import { Pause, Play, RotateCcw, RotateCw, Clapperboard, Film, Volume2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -35,8 +35,8 @@ export function Player({ app }: { app: AppApi }) {
   const groups = [...new Set([...Object.keys(app.state?.groups || {}), ...(app.project?.tracks || []).map((t) => t.group_id)])]
 
   return (
-    <section className="flex min-h-0 flex-col">
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-zinc-900">
+    <section className="flex min-h-0 flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-zinc-900 dark:bg-black">
         {/* The video src is set imperatively by app.setVideoSource (media URL
             + seek-after-load), exactly as the original player did. */}
         <video
@@ -48,16 +48,20 @@ export function Player({ app }: { app: AppApi }) {
           onTimeUpdate={(e) => app.onVideoTime(e.currentTarget.currentTime * 1000)}
         />
         {cueText && (
-          <div className="pointer-events-none absolute inset-x-[8%] bottom-[8%] text-center text-[17px] leading-relaxed text-white [text-shadow:0_1px_3px_#000,0_0_8px_#000]">
-            <span className="rounded bg-black/40 px-2 py-0.5 [box-decoration-break:clone]">{cueText}</span>
+          <div className="pointer-events-none absolute inset-x-[8%] bottom-[7%] text-center text-lg font-medium leading-relaxed text-white [text-shadow:0_1px_3px_#000,0_0_8px_#000]">
+            <span className="rounded-md bg-black/55 px-3 py-1 [box-decoration-break:clone]">{cueText}</span>
           </div>
         )}
         {!srcPath && (
-          <div className="pointer-events-none absolute text-sm text-zinc-400">打开视频后在此预览</div>
+          <div className="pointer-events-none flex flex-col items-center gap-3 px-6 text-center text-zinc-400">
+            <Film className="size-12 opacity-40" />
+            <div className="text-base font-medium">还没有打开视频</div>
+            <div className="text-sm">点左上角「打开媒体」，选好视频与字幕后就能开始剪辑</div>
+          </div>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2 pt-2 text-muted-foreground">
-        <div className="flex gap-1">
+      <div className="flex flex-wrap items-center gap-2.5 text-muted-foreground">
+        <div className="flex gap-1.5">
           <Button variant="outline" size="sm" onClick={app.togglePlay} title="播放 / 暂停（空格）">
             {app.playing ? <Pause className="size-4" /> : <Play className="size-4" />}
             {app.playing ? '暂停' : '播放'}
@@ -75,7 +79,7 @@ export function Player({ app }: { app: AppApi }) {
             预览成片
           </Button>
         </div>
-        <span className="font-mono text-xs">
+        <span className="font-mono text-sm tabular-nums">
           原片 {fmt(app.srcMs)} / 输出 {app.outputMs === null ? '--' : fmt(app.outputMs)} / 共 {fmt(app.totalMs)}
         </span>
         <div className="flex-1" />
@@ -91,7 +95,7 @@ export function Player({ app }: { app: AppApi }) {
             if (t) app.setCueTrack(t.id)
           }}
         >
-          <SelectTrigger className="h-8 w-[110px] text-xs">
+          <SelectTrigger className="h-9 w-[124px] text-sm">
             <SelectValue placeholder="字幕轨" />
           </SelectTrigger>
           <SelectContent>
@@ -102,10 +106,10 @@ export function Player({ app }: { app: AppApi }) {
             ))}
           </SelectContent>
         </Select>
-        <label className="flex items-center gap-2 text-xs">
+        <label className="flex items-center gap-2 text-sm">
           <Volume2 className="size-4" />
           <Slider
-            className="w-[68px]"
+            className="w-[84px]"
             value={[app.volume]}
             min={0}
             max={100}
@@ -119,7 +123,7 @@ export function Player({ app }: { app: AppApi }) {
             }}
           />
         </label>
-        <label className="flex cursor-pointer items-center gap-2 text-xs" title="开启后播放器按输出顺序跳过未保留部分，用于预览成片；关闭则自由浏览原片">
+        <label className="flex cursor-pointer items-center gap-2 text-sm" title="开启后播放器按输出顺序跳过未保留部分，用于预览成片；关闭则自由浏览原片">
           <Switch
             checked={app.follow}
             onCheckedChange={(v) => {

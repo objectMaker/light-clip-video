@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { Captions, Scissors, SlidersHorizontal } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -21,9 +22,11 @@ import {
   RecentDialog,
 } from '@/components/dialogs'
 import { fmt } from '@/lib/format'
+import { useTheme } from '@/hooks/useTheme'
 
 export default function App() {
   const app = useAppState()
+  const { resolvedTheme } = useTheme()
   const appRef = useRef(app)
   appRef.current = app
   const initRef = useRef(false)
@@ -150,19 +153,28 @@ export default function App() {
   const sizeHint = estimated ? ` · 预计体积 ${(estimated / 1048576).toFixed(1)} MB` : ''
 
   return (
-    <TooltipProvider>
-      <div className="flex h-full min-w-[900px] flex-col">
+    <TooltipProvider delayDuration={350}>
+      <div className="flex h-full min-w-[900px] flex-col bg-app text-app-foreground transition-colors duration-200">
         <Topbar app={app} />
-        <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)] gap-3 p-3">
+        <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.55fr)_minmax(380px,1fr)] gap-4 p-4">
           <Player app={app} />
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-background">
+          <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
             <Tabs value={app.tab} onValueChange={(v) => app.setTab(v as 'clips' | 'cues' | 'settings')} className="flex min-h-0 flex-1 flex-col">
-              <TabsList className="mx-3 mt-3 grid grid-cols-3">
-                <TabsTrigger value="clips">片段</TabsTrigger>
-                <TabsTrigger value="cues">字幕</TabsTrigger>
-                <TabsTrigger value="settings">设置</TabsTrigger>
+              <TabsList className="mx-4 mt-4 grid h-10 grid-cols-3">
+                <TabsTrigger value="clips" className="gap-1.5">
+                  <Scissors className="size-4" />
+                  片段
+                </TabsTrigger>
+                <TabsTrigger value="cues" className="gap-1.5">
+                  <Captions className="size-4" />
+                  字幕
+                </TabsTrigger>
+                <TabsTrigger value="settings" className="gap-1.5">
+                  <SlidersHorizontal className="size-4" />
+                  设置
+                </TabsTrigger>
               </TabsList>
-              <div className="flex min-h-0 flex-1 flex-col p-3">
+              <div className="flex min-h-0 flex-1 flex-col p-4 pt-3">
                 {app.tab === 'clips' && <ClipsPanel app={app} />}
                 {app.tab === 'cues' && <CuesPanel app={app} />}
                 {app.tab === 'settings' && <SettingsPanel app={app} />}
@@ -171,10 +183,13 @@ export default function App() {
           </aside>
         </main>
         <Timeline app={app} />
-        <footer className="flex shrink-0 items-center border-t bg-background px-4 py-1.5 text-xs text-muted-foreground">
-          <span>{app.status}</span>
+        <footer className="flex shrink-0 items-center gap-3 border-t bg-background px-5 py-2.5 text-xs text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-2 truncate">
+            <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+            <span className="truncate">{app.status || '就绪'}</span>
+          </span>
           <div className="flex-1" />
-          <span>
+          <span className="shrink-0 font-mono tabular-nums">
             {clips} 段 · 输出 {fmt(app.totalMs)} · {(app.project?.tracks || []).length} 条字幕轨{sizeHint}
           </span>
         </footer>
@@ -188,7 +203,7 @@ export default function App() {
       <PromptDialog app={app} />
       <ConfirmDialog app={app} />
       <HiddenFileInputs app={app} />
-      <Toaster position="bottom-right" richColors closeButton />
+      <Toaster position="bottom-right" richColors closeButton theme={resolvedTheme} />
     </TooltipProvider>
   )
 }
