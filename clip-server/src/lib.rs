@@ -571,7 +571,7 @@ fn apply_cue_edit(body: &Value, state: &Arc<State>, cfg: &ServerConfig) -> Resul
         };
         let cues = project.tracks[track_idx].cues.clone();
         let mut indices: Vec<i64>;
-        if action == "set" {
+        if action == "set" || action == "set_text" {
             let i = body.get("index").and_then(|v| v.as_i64()).unwrap_or(-1);
             if i < 0 || i as usize >= cues.len() {
                 return Err("要设置的字幕行不存在".into());
@@ -591,7 +591,17 @@ fn apply_cue_edit(body: &Value, state: &Arc<State>, cfg: &ServerConfig) -> Resul
             return Err("没有选中要矫正的字幕行".into());
         }
 
-        if action == "set" {
+        if action == "set_text" {
+            let i = indices[0];
+            let lines: Vec<String> = body
+                .get("lines")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|str| str.to_string())).collect())
+                .unwrap_or_default();
+            let mut new_cues = cues.clone();
+            new_cues[i as usize].lines = lines;
+            project.tracks[track_idx].cues = new_cues;
+        } else if action == "set" {
             let i = indices[0];
             let start = body.get("start_ms").and_then(|v| v.as_i64()).unwrap_or(0);
             let end = body.get("end_ms").and_then(|v| v.as_i64()).unwrap_or(0);

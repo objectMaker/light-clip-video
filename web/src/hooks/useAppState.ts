@@ -949,6 +949,17 @@ export function useAppState() {
     [commitCueEdit],
   )
 
+  const wbSetText = useCallback(
+    async (lines: string[]) => {
+      if (activeCueRef.current == null) {
+        setStatus('先选一句字幕')
+        return
+      }
+      await commitCueEdit({ action: 'set_text', index: activeCueRef.current, lines })
+    },
+    [commitCueEdit],
+  )
+
   const wbShiftWholeTrack = useCallback(
     async (delta: number, all: boolean) => {
       await commitCueEdit({ action: 'shift', scope: all ? 'all_tracks' : 'track', indices: [], delta_ms: delta, edge: 'both' })
@@ -1605,7 +1616,7 @@ export function useAppState() {
     clipboardCopy, clipboardCut, clipboardPaste, clipboardDelete,
     applyWholeClips, clearClips,
     selectCue, visibleCueIndices, addClipsFromEndpoints, addClipsFromChecked,
-    wbShift, wbSetExact, wbShiftWholeTrack, wbReload, toggleCueLoop, gotoCueRelative,
+    wbShift, wbSetExact, wbSetText, wbShiftWholeTrack, wbReload, toggleCueLoop, gotoCueRelative,
     showCueSub, wbSummary, commitCueEdit,
     exportSubtitlesOnly, startExport, confirmExportGo, reveal, pollExport,
     setProfileMode: setProfileModeFull, applyBuiltinAsCustom, applyPresetValues,

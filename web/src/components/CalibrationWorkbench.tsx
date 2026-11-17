@@ -14,6 +14,7 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
   const [preview, setPreview] = useState<{ ns: number; ne: number } | null>(null)
   const [startText, setStartText] = useState('')
   const [endText, setEndText] = useState('')
+  const [cueText, setCueText] = useState('')
   const dragRef = useRef<{ mode: 'l' | 'r' | 'b'; x: number; win: { start: number; end: number }; origStart: number; origEnd: number; w: number } | null>(null)
   const tlRef = useRef<HTMLDivElement | null>(null)
 
@@ -21,9 +22,10 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
     if (cue) {
       setStartText(fmt(cue.start_ms))
       setEndText(fmt(cue.end_ms))
+      setCueText(cue.lines.join('\n'))
       setPreview(null)
     }
-  }, [cue?.start_ms, cue?.end_ms, idx]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cue?.start_ms, cue?.end_ms, cue?.lines, idx])
 
   if (!track || !cue || idx === null) {
     return (
@@ -233,6 +235,35 @@ export function CalibrationWorkbench({ app }: { app: AppApi }) {
         <Button variant="outline" size="sm" onClick={applyExact}>
           应用精确时间
         </Button>
+      </div>
+      <div className="flex flex-col gap-1.5 border-t border-dashed pt-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-muted-foreground">台词文本编辑（支持多行双语）</span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const lines = cueText.split('\n')
+              void app.wbSetText(lines)
+            }}
+          >
+            保存文本
+          </Button>
+        </div>
+        <textarea
+          className="h-16 w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-xs leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-y"
+          placeholder="字幕台词内容（多行则按行拆分）"
+          value={cueText}
+          onChange={(e) => setCueText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault()
+              const lines = cueText.split('\n')
+              void app.wbSetText(lines)
+            }
+          }}
+        />
+        <span className="text-[10px] text-muted-foreground">按 Ctrl+Enter 或点击「保存文本」立即生效</span>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 border-t border-dashed pt-2">
         <span className="text-xs text-muted-foreground">整轨偏移</span>
