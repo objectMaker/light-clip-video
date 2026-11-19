@@ -101,29 +101,120 @@ export function SettingsPanel({ app }: { app: AppApi }) {
     const fps = vid?.fps_float || 0
     const codec = (vid?.codec || '').toLowerCase()
     const isEfficient = ['av1', 'av01', 'vp9', 'hevc', 'h265'].some((c) => codec.includes(c))
-    const effectiveKbps = isEfficient ? Math.round(vkbps * 1.35) : vkbps
+    const effectiveKbps = isEfficient ? Math.round(vkbps * 1.5) : vkbps
 
-    if ((height > 0 && height <= 540) || (effectiveKbps > 0 && effectiveKbps < 800)) {
+    // 1. 高帧率全局优先升一档
+    if (fps >= 49.0) {
+      return {
+        id: 'builtin_720p_t1' as const,
+        name: '一档 · 防马赛克',
+        tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
+        reason: '检测到高帧率(>=50fps)动态片源，自动升为一档（CRF 27 / 峰值 1100k）以抑制运动撕裂与马赛克。',
+      }
+    }
+
+    // 2. 小分辨率 (<= 540p)
+    if (height > 0 && height <= 540) {
       return {
         id: 'builtin_720p_t3' as const,
         name: '三档 · 极致紧凑',
         tagline: 'CRF 28 / 峰值 900k / 音频 96k',
-        reason: '源片本身码率/分辨率较低，分配三档极致紧凑，避免二次重编码体积虚胖浪费。',
+        reason: '源片本身分辨率较低(<=540p)，分配三档极致紧凑（CRF 28 / 峰值 900k），避免二次重编码体积虚胖浪费。',
       }
     }
-    if (fps >= 49.0 || (height >= 1080 && effectiveKbps >= 2500) || effectiveKbps >= 2200) {
+
+    // 3. 720p 档位 (540p < height <= 720p)
+    if (height > 540 && height <= 720) {
+      if (effectiveKbps >= 1000 || (isEfficient && vkbps >= 650)) {
+        return {
+          id: 'builtin_720p_t1' as const,
+          name: '一档 · 防马赛克',
+          tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
+          reason: '720p 源片具备充足有效码率与动态细节，自动升为一档（CRF 27 / 峰值 1100k）以杜绝镜头晃动马赛克。',
+        }
+      }
+      if ((effectiveKbps > 0 && effectiveKbps < 650) || (isEfficient && vkbps > 0 && vkbps < 450)) {
+        return {
+          id: 'builtin_720p_t3' as const,
+          name: '三档 · 极致紧凑',
+          tagline: 'CRF 28 / 峰值 900k / 音频 96k',
+          reason: '720p 源片码率较为匮乏，分配三档极致紧凑（CRF 28 / 峰值 900k）以防二次转码体积虚胖。',
+        }
+      }
+      return {
+        id: 'builtin_720p_t2' as const,
+        name: '二档 · 标准主力',
+        tagline: 'CRF 27 / 峰值 950k / 音频 96k',
+        reason: '720p 标准均衡片源，分配二档标准主力（CRF 27 / 峰值 950k），兼顾画质与轻量体积。',
+      }
+    }
+
+    // 4. 1080p 档位 (720p < height <= 1080p)
+    if (height > 720 && height <= 1080) {
+      if (effectiveKbps >= 2400) {
+        return {
+          id: 'builtin_720p_t1' as const,
+          name: '一档 · 防马赛克',
+          tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
+          reason: '1080p 高清源片且码率充沛，下采样至 720p 时自动升为一档（CRF 27 / 峰值 1100k）保留高保真细节。',
+        }
+      }
+      if (effectiveKbps > 0 && effectiveKbps < 850) {
+        return {
+          id: 'builtin_720p_t3' as const,
+          name: '三档 · 极致紧凑',
+          tagline: 'CRF 28 / 峰值 900k / 音频 96k',
+          reason: '1080p 源片码率较为紧凑，分配三档极致紧凑（CRF 28 / 峰值 900k），杜绝过度转码浪费。',
+        }
+      }
+      return {
+        id: 'builtin_720p_t2' as const,
+        name: '二档 · 标准主力',
+        tagline: 'CRF 27 / 峰值 950k / 音频 96k',
+        reason: '1080p 常规教学与日常片源，分配二档标准主力（CRF 27 / 峰值 950k），兼顾扎实画质与精简体积。',
+      }
+    }
+
+    // 5. 4K / 超清档位 (height > 1080p)
+    if (height > 1080) {
+      if (effectiveKbps > 0 && effectiveKbps < 1200) {
+        return {
+          id: 'builtin_720p_t3' as const,
+          name: '三档 · 极致紧凑',
+          tagline: 'CRF 28 / 峰值 900k / 音频 96k',
+          reason: '超清源片码率较低，分配三档极致紧凑以防体积虚胖。',
+        }
+      }
       return {
         id: 'builtin_720p_t1' as const,
         name: '一档 · 防马赛克',
-        tagline: 'CRF 26 / 峰值 1000k / 音频 96k',
-        reason: '检测到画面包含高帧率或丰富高动态细节，自动升为一档以抑制镜头晃动马赛克。',
+        tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
+        reason: '4K/超清高精源片，下采样至 720p 时自动分配一档（CRF 27 / 峰值 1100k）以保留最佳纹理。',
+      }
+    }
+
+    // 6. 未知分辨率回退
+    if (effectiveKbps >= 1500) {
+      return {
+        id: 'builtin_720p_t1' as const,
+        name: '一档 · 防马赛克',
+        tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
+        reason: '源片有效码率充沛，自动分配一档（CRF 27 / 峰值 1100k）防马赛克。',
+      }
+    }
+    if (effectiveKbps > 0 && effectiveKbps < 800) {
+      return {
+        id: 'builtin_720p_t3' as const,
+        name: '三档 · 极致紧凑',
+        tagline: 'CRF 28 / 峰值 900k / 音频 96k',
+        reason: '源片有效码率较低，自动分配三档极致紧凑（CRF 28 / 峰值 900k）防虚胖。',
       }
     }
     return {
       id: 'builtin_720p_t2' as const,
       name: '二档 · 标准主力',
       tagline: 'CRF 27 / 峰值 950k / 音频 96k',
-      reason: '源片为标准正常片源，优先分配二档标准主力，兼顾扎实画质与精简体积。',
+      reason: '源片码率适中，优先分配二档标准主力（CRF 27 / 峰值 950k）。',
     }
   }, [app.srcInfo])
 
@@ -182,7 +273,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
             : [
                 { id: 'source', label: '沿用原片', tagline: '什么都不改', detail: '' },
                 { id: 'builtin_720p', label: '720p 智能自适应', tagline: '算法毫秒匹配', detail: '' },
-                { id: 'builtin_720p_t1', label: '一档 · 防马赛克', tagline: 'CRF 26 / 1000k', detail: '' },
+                { id: 'builtin_720p_t1', label: '一档 · 防马赛克', tagline: 'CRF 27 / 1100k', detail: '' },
                 { id: 'builtin_720p_t2', label: '二档 · 标准主力', tagline: 'CRF 27 / 950k', detail: '' },
                 { id: 'builtin_720p_t3', label: '三档 · 极致紧凑', tagline: 'CRF 28 / 900k', detail: '' },
                 { id: 'custom', label: '自定义', tagline: '全部参数开放', detail: '' },
@@ -224,7 +315,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
                       ? 'border-primary bg-primary/10 font-semibold text-primary'
                       : 'border-input hover:border-primary hover:bg-background'
                   }`}
-                  title="强制指定为一档：CRF 26 / 峰值 1000k"
+                  title="强制指定为一档：CRF 27 / 峰值 1100k"
                 >
                   一档 (防马赛克)
                 </button>
@@ -261,7 +352,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
           <div className="mb-2 flex items-center justify-between rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
             <span>
               📌 <b>当前已手动指定档位</b>：
-              {app.profileMode === 'builtin_720p_t1' && '一档 · 防马赛克 (CRF 26 / 峰值 1000k / 音频 96k)'}
+              {app.profileMode === 'builtin_720p_t1' && '一档 · 防马赛克 (CRF 27 / 峰值 1100k / 音频 96k)'}
               {app.profileMode === 'builtin_720p_t2' && '二档 · 标准主力 (CRF 27 / 峰值 950k / 音频 96k)'}
               {app.profileMode === 'builtin_720p_t3' && '三档 · 极致紧凑 (CRF 28 / 峰值 900k / 音频 96k)'}
             </span>

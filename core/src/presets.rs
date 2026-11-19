@@ -31,8 +31,8 @@ pub const PROFILE_IDS: &[&str] = &[
 pub const BUILTIN_720P_SPEED: &str = "slow";
 
 /// 档位 1: 优质源片/高动态防马赛克档 (720p High / Anti-Macroblock)
-/// 适合大幅移动、剧烈晃动、高帧率或 1080p 优质源片，有效防止晃动出马赛克。
-/// `crf=26`, `maxrate=1000k`, `bufsize=2000k`, `audio=96k aac`
+/// 适合大幅移动、剧烈晃动、高帧率或追求细节的视频，放宽峰值天花板，平缓镜头用 CRF 27 省流，剧烈晃动用 1100k 峰值抗马赛克。
+/// `crf=27`, `maxrate=1100k`, `bufsize=2200k`, `audio=96k aac`
 pub fn builtin_720p_t1() -> EncodeCfg {
     EncodeCfg {
         video_codec: "libx264".to_string(),
@@ -44,10 +44,10 @@ pub fn builtin_720p_t1() -> EncodeCfg {
         profile: String::new(),
         level: String::new(),
         rate_control: "crf".to_string(),
-        crf: 26,
+        crf: 27,
         video_kbps: 0,
-        maxrate_kbps: 1000,
-        bufsize_kbps: 2000,
+        maxrate_kbps: 1100,
+        bufsize_kbps: 2200,
         gop: 0,
         bframes: -1,
         audio_codec: "aac".to_string(),
@@ -131,9 +131,20 @@ pub fn builtin_720p() -> EncodeCfg {
 /// 根据源片客观分辨率、视频码率、帧率及编码类型智能选择匹配的 720p 预设及其判定原因。
 ///
 /// 核心法则：
-/// 1. 默认主力二档：当视频不是非常差、也不是极限高动态时，尽量用二档（CRF 27 / 950k）；
-/// 2. 升一档防马赛克：移动非常多/高帧率/高复杂度时，才升去一档（CRF 26 / 1000k），避免破防出马赛克；
-/// 3. 降三档防浪费：原视频本身较差（码率低或分辨率小）时用第三档就足够（CRF 28 / 900k），绝不虚胖浪费。
+/// 结合编码格式转换损耗系数（AV1/VP9/HEVC 需约 1.5x 码率对齐 H.264）与不同分辨率的像素密度（bppf 阶梯法则），
+/// 对输入片源实行多维智能分流：
+/// 1. 高帧率全局优先升一档：fps >= 49.0，抑制运动撕裂与晃动马赛克；
+/// 2. 小分辨率降三档（<= 540p）：小画面无需高码率，降三档极致紧凑杜绝虚胖；
+/// 3. 720p 档位（540p < h <= 720p）：
+///    - effective_kbps >= 1000（或高效编码 >= 650k，如手持走动 VLOG）：自动升一档（CRF 27 / 1100k），彻底消灭马赛克；
+///    - effective_kbps < 650（或高效编码 < 450k）：降三档（CRF 28 / 900k）；
+///    - 其余：二档标准主力（CRF 27 / 950k）；
+/// 4. 1080p 档位（720p < h <= 1080p）：
+///    - effective_kbps >= 2400：升一档保留高保真细节；
+///    - effective_kbps < 850（如低码率教学片）：降三档极致紧凑杜绝浪费；
+///    - 其余：二档标准主力；
+/// 5. 超清 2K/4K 档位（h > 1080p）：
+///    - effective_kbps < 1200：降三档；其余升一档。
 pub fn adaptive_720p_preset_with_reason(
     source_height: i64,
     source_video_kbps: i64,
@@ -141,37 +152,100 @@ pub fn adaptive_720p_preset_with_reason(
     is_efficient_codec: bool,
 ) -> (&'static str, &'static str) {
     let effective_kbps = if is_efficient_codec {
-        (source_video_kbps as f64 * 1.35).round() as i64
+        (source_video_kbps as f64 * 1.5).round() as i64
     } else {
         source_video_kbps
     };
 
-    // 1. 降三档：原视频本身较差时用第三档就足够，杜绝虚胖浪费
-    if (source_height > 0 && source_height <= 540)
-        || (effective_kbps > 0 && effective_kbps < 800)
-    {
-        return (
-            PROFILE_720P_T3,
-            "源片本身码率/分辨率较低，分配三档极致紧凑，避免二次重编码体积虚胖浪费",
-        );
-    }
-
-    // 2. 升一档：移动非常多/运动剧烈，不然会有马赛克，才升去一档
-    if fps_float >= 49.0
-        || (source_height >= 1080 && effective_kbps >= 2500)
-        || effective_kbps >= 2200
-    {
+    // 1. 高帧率全局优先升一档
+    if fps_float >= 49.0 {
         return (
             PROFILE_720P_T1,
-            "检测到画面包含高帧率或丰富高动态细节，自动升为一档以抑制镜头晃动马赛克",
+            "检测到高帧率(>=50fps)动态片源，自动升为一档（CRF 27 / 峰值 1100k）以抑制运动撕裂与马赛克",
         );
     }
 
-    // 3. 默认主力二档：当视频不是非常差、也不是极限高动态时，尽量用二档
-    (
-        PROFILE_720P_T2,
-        "源片为标准正常片源，优先分配二档标准主力，兼顾扎实画质与精简体积",
-    )
+    // 2. 小分辨率 (<= 540p)：杜绝插值放大虚胖
+    if source_height > 0 && source_height <= 540 {
+        return (
+            PROFILE_720P_T3,
+            "源片本身分辨率较低(<=540p)，分配三档极致紧凑（CRF 28 / 峰值 900k），避免二次重编码体积虚胖浪费",
+        );
+    }
+
+    // 3. 720p 档位 (540p < height <= 720p)
+    if source_height > 540 && source_height <= 720 {
+        if effective_kbps >= 1000 || (is_efficient_codec && source_video_kbps >= 650) {
+            return (
+                PROFILE_720P_T1,
+                "720p 源片具备充足有效码率与动态细节，自动升为一档（CRF 27 / 峰值 1100k）以杜绝镜头晃动马赛克",
+            );
+        }
+        if (effective_kbps > 0 && effective_kbps < 650)
+            || (is_efficient_codec && source_video_kbps > 0 && source_video_kbps < 450)
+        {
+            return (
+                PROFILE_720P_T3,
+                "720p 源片码率较为匮乏，分配三档极致紧凑（CRF 28 / 峰值 900k）以防二次转码体积虚胖",
+            );
+        }
+        return (
+            PROFILE_720P_T2,
+            "720p 标准均衡片源，分配二档标准主力（CRF 27 / 峰值 950k），兼顾画质与轻量体积",
+        );
+    }
+
+    // 4. 1080p 档位 (720p < height <= 1080p)
+    if source_height > 720 && source_height <= 1080 {
+        if effective_kbps >= 2400 {
+            return (
+                PROFILE_720P_T1,
+                "1080p 高清源片且码率充沛，下采样至 720p 时自动升为一档（CRF 27 / 峰值 1100k）保留高保真细节",
+            );
+        }
+        if effective_kbps > 0 && effective_kbps < 850 {
+            return (
+                PROFILE_720P_T3,
+                "1080p 源片码率较为紧凑，分配三档极致紧凑（CRF 28 / 峰值 900k），杜绝过度转码浪费",
+            );
+        }
+        return (
+            PROFILE_720P_T2,
+            "1080p 常规教学与日常片源，分配二档标准主力（CRF 27 / 峰值 950k），兼顾扎实画质与精简体积",
+        );
+    }
+
+    // 5. 超清 2K / 4K 档位 (height > 1080p)
+    if source_height > 1080 {
+        if effective_kbps > 0 && effective_kbps < 1200 {
+            return (
+                PROFILE_720P_T3,
+                "超清源片码率较低，分配三档极致紧凑以防体积虚胖",
+            );
+        }
+        return (
+            PROFILE_720P_T1,
+            "4K/超清高精源片，下采样至 720p 时自动分配一档（CRF 27 / 峰值 1100k）以保留最佳纹理",
+        );
+    }
+
+    // 6. 未知分辨率回退
+    if effective_kbps >= 1500 {
+        (
+            PROFILE_720P_T1,
+            "源片有效码率充沛，自动分配一档（CRF 27 / 峰值 1100k）防马赛克",
+        )
+    } else if effective_kbps > 0 && effective_kbps < 800 {
+        (
+            PROFILE_720P_T3,
+            "源片有效码率较低，自动分配三档极致紧凑（CRF 28 / 峰值 900k）防虚胖",
+        )
+    } else {
+        (
+            PROFILE_720P_T2,
+            "源片码率适中，优先分配二档标准主力（CRF 27 / 峰值 950k）",
+        )
+    }
 }
 
 pub fn adaptive_720p_preset(
@@ -277,7 +351,7 @@ const P720_COMMAND: &str = "ffmpeg -i input.mkv -map 0:v:0 -map 0:a:0? -vf \"sca
 -c:a aac -b:a 96k -ac 2 -sn -movflags +faststart output.mp4";
 
 const P720_T1_COMMAND: &str = "ffmpeg -i input.mkv -map 0:v:0 -map 0:a:0? -vf \"scale=-2:720\" \
--c:v libx264 -preset slow -crf 26 -maxrate 1000k -bufsize 2000k -pix_fmt yuv420p \
+-c:v libx264 -preset slow -crf 27 -maxrate 1100k -bufsize 2200k -pix_fmt yuv420p \
 -c:a aac -b:a 96k -ac 2 -sn -movflags +faststart output.mp4";
 
 const P720_T2_COMMAND: &str = "ffmpeg -i input.mkv -map 0:v:0 -map 0:a:0? -vf \"scale=-2:720\" \
@@ -314,8 +388,8 @@ pub fn profile_catalog() -> Vec<ProfileCatalogEntry> {
                 .to_string(),
             bullets: vec![
                 Bullet { name: "分辨率".into(), value: "高度 720p，宽度按原比例自动取偶".into(), why: "体积最大杠杆，720p兼顾清晰与极轻体积".into() },
-                Bullet { name: "智能自适应".into(), value: "二档 (CRF 27) / 一档 (CRF 26) / 三档 (CRF 28)".into(), why: "根据源片客观特征毫秒自动匹配最优预设".into() },
-                Bullet { name: "码率缓冲池".into(), value: "900k ~ 1000k 动态蓄水池".into(), why: "静止省流，大幅晃动与动作平滑抗马赛克".into() },
+                Bullet { name: "智能自适应".into(), value: "二档 (CRF 27 / 950k) / 一档 (CRF 27 / 1100k) / 三档 (CRF 28 / 900k)".into(), why: "按格式与像素密度多维矩阵毫秒自动匹配最优预设".into() },
+                Bullet { name: "码率缓冲池".into(), value: "900k ~ 1100k 动态蓄水池".into(), why: "静态画面按需省流，大幅晃动与运动放开峰值抗马赛克".into() },
                 Bullet { name: "编码".into(), value: "H.264 / slow / 8-bit yuv420p".into(), why: "全平台全播放器硬件直出".into() },
                 Bullet { name: "音频".into(), value: "AAC 96 kbps 立体声".into(), why: "纯净语音恒定 96k，不浪费多余体积".into() },
                 Bullet { name: "封装".into(), value: "MP4 + faststart，不内嵌字幕".into(), why: "边下边播，外挂 SRT 同名即用".into() },
@@ -329,12 +403,12 @@ pub fn profile_catalog() -> Vec<ProfileCatalogEntry> {
         ProfileCatalogEntry {
             id: PROFILE_720P_T1.to_string(),
             label: "一档 · 防马赛克".to_string(),
-            tagline: "防马赛克：CRF 26 / 峰值 1000k / 音频 96k".to_string(),
-            detail: "适合大幅移动、剧烈晃动、高帧率或追求极高细节的视频，有效防止晃动出马赛克。".to_string(),
+            tagline: "防马赛克：CRF 27 / 峰值 1100k / 音频 96k".to_string(),
+            detail: "适合大幅移动、剧烈晃动、高帧率或追求细节的视频，放宽峰值天花板，平缓镜头用 CRF 27 省流，剧烈晃动用 1100k 峰值抗马赛克。".to_string(),
             bullets: vec![
                 Bullet { name: "分辨率".into(), value: "高度 720p".into(), why: "超采样高保真".into() },
-                Bullet { name: "画质".into(), value: "CRF 26（防马赛克最高画质档）".into(), why: "最高锐度，锁住发丝细节与字迹边缘".into() },
-                Bullet { name: "码率天花板".into(), value: "峰值 1000 kbps / 缓冲 2000 kbps".into(), why: "给足 2 秒缓冲空间，剧烈晃动不破防".into() },
+                Bullet { name: "画质".into(), value: "CRF 27（动态调优防马赛克档）".into(), why: "静态画面智能控重，与主力档画质平齐".into() },
+                Bullet { name: "码率天花板".into(), value: "峰值 1100 kbps / 缓冲 2200 kbps".into(), why: "放宽 1100k 峰值天花板与 2 秒缓冲空间，剧烈晃动镜头绝不破防出马赛克".into() },
                 Bullet { name: "音频".into(), value: "AAC 96 kbps 立体声".into(), why: "纯净语音恒定 96k".into() },
             ],
             command: Some(P720_T1_COMMAND.to_string()),
@@ -421,9 +495,9 @@ mod tests {
     #[test]
     fn p720_t1_and_t3_recipes() {
         let t1 = resolve_profile(PROFILE_720P_T1, &EncodeCfg::default(), "medium", false);
-        assert_eq!(t1.encode.crf, 26);
-        assert_eq!(t1.encode.maxrate_kbps, 1000);
-        assert_eq!(t1.encode.bufsize_kbps, 2000);
+        assert_eq!(t1.encode.crf, 27);
+        assert_eq!(t1.encode.maxrate_kbps, 1100);
+        assert_eq!(t1.encode.bufsize_kbps, 2200);
         assert_eq!(t1.encode.audio_kbps, 96);
 
         let t2 = resolve_profile(PROFILE_720P_T2, &EncodeCfg::default(), "medium", false);
@@ -443,15 +517,23 @@ mod tests {
     fn adaptive_preset_selection() {
         // 1. 60fps 高帧率/高动态 -> 自动升 T1
         assert_eq!(adaptive_720p_preset(720, 1000, 60.0, false), PROFILE_720P_T1);
-        // 2. 1080p 优质源片且码率充足 -> 升 T1
-        assert_eq!(adaptive_720p_preset(1080, 2000, 30.0, true), PROFILE_720P_T1); // 2000 * 1.35 = 2700 >= 2500
-        // 3. 720p 贫码率源片 (< 800k) -> 降 T3 防虚胖
+        // 2. 720p 677k AV1 走动 VLOG (如 busy day) -> 自动升 T1 (effective 677 * 1.5 = 1016 >= 1000 且 677 >= 650)
+        assert_eq!(adaptive_720p_preset(720, 677, 30.0, true), PROFILE_720P_T1);
+        // 3. 720p 贫码率源片 (< 650k H.264 或 < 450k AV1) -> 降 T3 防虚胖
         assert_eq!(adaptive_720p_preset(720, 500, 30.0, false), PROFILE_720P_T3);
-        // 4. 小分辨率 (480p) -> 降 T3
+        assert_eq!(adaptive_720p_preset(720, 350, 30.0, true), PROFILE_720P_T3);
+        // 4. 720p 正常片源 (如 800k H.264) -> 二档 T2
+        assert_eq!(adaptive_720p_preset(720, 800, 30.0, false), PROFILE_720P_T2);
+        // 5. 小分辨率 (480p) -> 降 T3
         assert_eq!(adaptive_720p_preset(480, 1000, 30.0, false), PROFILE_720P_T3);
-        // 5. 普通正常 720p / 1080p 片源 -> 默认主力 T2
-        assert_eq!(adaptive_720p_preset(720, 1200, 30.0, false), PROFILE_720P_T2);
-        assert_eq!(adaptive_720p_preset(1080, 1200, 30.0, false), PROFILE_720P_T2);
+        // 6. 1080p 优质大片 (8000k H.264) -> 升 T1
+        assert_eq!(adaptive_720p_preset(1080, 8000, 30.0, false), PROFILE_720P_T1);
+        // 7. 1080p 紧凑片源 (如 Everyday English 510k AV1, 510*1.5=765 < 850) -> 降 T3
+        assert_eq!(adaptive_720p_preset(1080, 510, 30.0, true), PROFILE_720P_T3);
+        // 8. 1080p 常规教学片 (如 1500k H.264) -> 默认主力 T2
+        assert_eq!(adaptive_720p_preset(1080, 1500, 30.0, false), PROFILE_720P_T2);
+        // 9. 4K 高清片源 -> 升 T1
+        assert_eq!(adaptive_720p_preset(2160, 10000, 30.0, false), PROFILE_720P_T1);
     }
 
     #[test]

@@ -348,20 +348,31 @@ mod tests {
     }
 
     #[test]
+    fn builtin_720p_promotes_to_t1_for_dynamic_720p_av1() {
+        let mut i = info("av1", 677, 128);
+        i.video.height = 720;
+        let cfg = crate::presets::builtin_720p();
+        let p = plan_rate(&i, &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
+        assert_eq!(p.crf, 27); // T1 防马赛克 CRF 27
+        assert_eq!(p.maxrate_kbps, Some(1100)); // T1 1100k 峰值
+        assert_eq!(p.bufsize_kbps, Some(2200)); // T1 2200k 缓冲
+    }
+
+    #[test]
     fn high_bitrate_source_keeps_recipe_ceiling() {
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&info("h264", 8000, 192), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
-        assert_eq!(p.maxrate_kbps, Some(1000)); // 8000k 自动升级 T1 高动态防马赛克
-        assert_eq!(p.ceiling_kbps, Some(1000));
+        assert_eq!(p.maxrate_kbps, Some(1100)); // 8000k 自动升级 T1 高动态防马赛克
+        assert_eq!(p.ceiling_kbps, Some(1100));
     }
 
     #[test]
     fn presets_t1_and_t3_rates() {
         let t1_cfg = crate::presets::builtin_720p_t1();
         let p1 = plan_rate(&info("h264", 8000, 192), &t1_cfg, true, "builtin_720p_t1", &ExportMode::Precise, 18);
-        assert_eq!(p1.crf, 26);
-        assert_eq!(p1.maxrate_kbps, Some(1000));
-        assert_eq!(p1.bufsize_kbps, Some(2000));
+        assert_eq!(p1.crf, 27);
+        assert_eq!(p1.maxrate_kbps, Some(1100));
+        assert_eq!(p1.bufsize_kbps, Some(2200));
 
         let t2_cfg = crate::presets::builtin_720p_t2();
         let p2 = plan_rate(&info("h264", 8000, 192), &t2_cfg, true, "builtin_720p_t2", &ExportMode::Precise, 18);
