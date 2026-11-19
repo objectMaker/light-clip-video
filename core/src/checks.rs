@@ -4,7 +4,9 @@
 //! No ffmpeg calls, no project mutation - just source facts + chosen overrides.
 
 use crate::model::{EncodeCfg, ExportMode};
-use crate::presets::{resolve_profile, PROFILE_720P};
+use crate::presets::{
+    resolve_profile, PROFILE_720P, PROFILE_720P_T1, PROFILE_720P_T2, PROFILE_720P_T3,
+};
 use crate::probe::{source_bitrates, EncodeParams};
 use crate::rate::plan_rate;
 use serde::Serialize;
@@ -80,10 +82,15 @@ pub fn evaluate_encode(
         if cfg.crf > 0 { cfg.crf } else { 18 },
     );
 
-    if profile_mode == PROFILE_720P && *mode == ExportMode::Lossless {
+    let is_720p_preset = matches!(
+        profile_mode,
+        PROFILE_720P | PROFILE_720P_T1 | PROFILE_720P_T2 | PROFILE_720P_T3
+    );
+
+    if is_720p_preset && *mode == ExportMode::Lossless {
         warnings.push(item(
             "warn",
-            "720p 省体积方案在无损模式下不生效",
+            "720p 预设方案在无损模式下不生效",
             "无损是流拷贝（不重新编码），分辨率、CRF、码率上限全部会被忽略。要用这套压缩参数请切到「精确模式」。",
         ));
     }
@@ -104,12 +111,17 @@ pub fn evaluate_encode(
     if cfg.scale_mode == "height" && cfg.height > 0 && src_h > 0 {
         let ratio = (cfg.height as f64 / src_h as f64).powi(2);
         let est_w = ((src_w as f64 * cfg.height as f64 / src_h as f64 / 2.0).round() as i64 * 2).max(2);
-        let builtin_cap = profile_mode == PROFILE_720P;
-        if builtin_cap && cfg.height >= src_h {
+        if is_720p_preset && cfg.height == src_h {
             warnings.push(item(
                 "info",
-                "源片分辨率已低于预设上限",
-                &format!("源片 {src_w}×{src_h} 不超过 {}p，不会把它放大；仍按 CRF 24 + 峰值码率上限重新编码来减小体积。", cfg.height),
+                "源片分辨率已为 720p，无需缩放",
+                &format!("源片 {src_w}×{src_h} 原生即为 720p，直接保留原分辨率并按选定预设编码，画质更纯净。"),
+            ));
+        } else if is_720p_preset && cfg.height > src_h {
+            warnings.push(item(
+                "info",
+                "源片分辨率已低于 720p，避免放大",
+                &format!("源片 {src_w}×{src_h} 不超过 {}p，不会把它放大；按选定预设重新编码以控制体积。", cfg.height),
             ));
         } else if cfg.height > src_h {
             warnings.push(item(
@@ -437,10 +449,10 @@ mod tests {
     }
 
     #[test]
-    fn builtin_720p_ceiling_clamped_and_no_false_lossless_hint() {
+    fn builtin_720p_evaluates_with_tier_ceiling_and_no_false_lossless_hint() {
         let e = evaluate_encode(&av1_low_bitrate(), &EncodeCfg::default(), 60_000, &ExportMode::Precise, 1, true, "builtin_720p");
-        assert!(e.ratio.unwrap() <= 1.25, "720p recipe with AV1 compensation must stay under 1.25x: {:?}", e.ratio);
-        assert!(e.warnings.iter().any(|w| w.title.contains("调整") || w.title.contains("下调")));
+        assert!(e.ratio.is_some());
+        assert!(!e.warnings.iter().any(|w| w.title.contains("峰值上限已按源片合理调整")));
         assert!(!e.warnings.iter().any(|w| w.title == "无损模式下转码参数不生效"));
     }
 }

@@ -17,7 +17,9 @@ use std::path::Path;
 
 use crate::checks::evaluate_encode;
 use crate::model::{ExportMode, Project, Source};
-use crate::presets::{resolve_profile, PROFILE_720P};
+use crate::presets::{
+    resolve_profile, PROFILE_720P, PROFILE_720P_T1, PROFILE_720P_T2, PROFILE_720P_T3,
+};
 use crate::probe::{AudioParams, EncodeParams, FormatParams, VideoParams};
 use crate::rate::plan_rate;
 use crate::remap::{build_segments, preview_state};
@@ -258,9 +260,13 @@ pub fn build_export_plan(
             }
 
             let mut scale_expr = String::new();
+            let is_720p_preset = matches!(
+                project.output.profile_mode.as_str(),
+                PROFILE_720P | PROFILE_720P_T1 | PROFILE_720P_T2 | PROFILE_720P_T3
+            );
             if cfg.scale_mode == "height" && cfg.height > 0 {
                 let src_h = v.map(|v| v.height).unwrap_or(0);
-                if project.output.profile_mode == PROFILE_720P && src_h > 0 && src_h <= cfg.height {
+                if is_720p_preset && src_h > 0 && src_h < cfg.height {
                     warnings.push(format!(
                         "源 {} 本身只有 {}p，720p 预设不会把它放大（放大只是白占空间）。",
                         Path::new(&source.path).file_name().and_then(|s| s.to_str()).unwrap_or(""),
@@ -270,7 +276,6 @@ pub fn build_export_plan(
                     scale_expr = format!("-2:{}", cfg.height);
                 }
             } else if cfg.scale_mode == "width" && cfg.width > 0 {
-                scale_expr = format!(":{}", cfg.width);
                 scale_expr = format!("{}:-2", cfg.width);
             } else if cfg.width > 0 && cfg.height > 0 {
                 scale_expr = format!("{}:{}", cfg.width, cfg.height);
@@ -792,12 +797,22 @@ mod tests {
     }
 
     #[test]
-    fn builtin_720p_clamps_ceiling_and_buffer_to_source() {
+    fn builtin_720p_uses_tier_preset_on_av1_source() {
         let (cmd, _) = cmd_for("builtin_720p", av1_info());
         assert_eq!(value_after(&cmd, "-crf"), "27"); // 自动匹配 T2 标准主力
-        assert_eq!(value_after(&cmd, "-maxrate"), "846k"); // clamped down from 950k with 1.25x AV1 compensation
-        assert_eq!(value_after(&cmd, "-bufsize"), "1603k"); // 1800/950 * 846
+        assert_eq!(value_after(&cmd, "-maxrate"), "950k"); // T2 950k
+        assert_eq!(value_after(&cmd, "-bufsize"), "1800k"); // T2 1800k
         assert_eq!(value_after(&cmd, "-b:a"), "96000");
+
+        let (cmd_t1, _) = cmd_for("builtin_720p_t1", av1_info());
+        assert_eq!(value_after(&cmd_t1, "-crf"), "26"); // T1 一档防马赛克
+        assert_eq!(value_after(&cmd_t1, "-maxrate"), "1000k"); // T1 1000k 峰值
+        assert_eq!(value_after(&cmd_t1, "-bufsize"), "2000k"); // T1 2000k 缓冲区
+
+        let (cmd_t3, _) = cmd_for("builtin_720p_t3", av1_info());
+        assert_eq!(value_after(&cmd_t3, "-crf"), "28"); // T3 三档极致紧凑
+        assert_eq!(value_after(&cmd_t3, "-maxrate"), "900k"); // T3 900k
+        assert_eq!(value_after(&cmd_t3, "-bufsize"), "1700k"); // T3 1700k
     }
 
     #[test]

@@ -139,6 +139,14 @@ pub fn plan_rate(
         v_kbps
     };
 
+    let is_720p_preset = matches!(
+        profile_mode,
+        crate::presets::PROFILE_720P
+            | crate::presets::PROFILE_720P_T1
+            | crate::presets::PROFILE_720P_T2
+            | crate::presets::PROFILE_720P_T3
+    );
+
     // 当源片为 VP9/AV1 等高效编码时，H.264 必须适度给码率补偿，否则画质塌陷；
     // 同时绝对不能突破预设的 desired 天花板，杜绝体积膨胀！
     let source_ceiling_ref = if class == CodecClass::Efficient && v_kbps > 0 {
@@ -148,7 +156,16 @@ pub fn plan_rate(
     };
 
     let mut ceiling_clamped = false;
-    let ceiling = if v_kbps > 0 {
+    let ceiling = if is_720p_preset {
+        // 720p 三档阶梯（T1/T2/T3）均为严格调校的 Capped CRF 黄金配方。
+        // 坚决保持各档位设定的峰值天花板与缓冲区，严禁被源片低码率削峰压平，
+        // 确保一档防马赛克有充足峰值缓冲，同时保证三档之间清晰的阶梯梯度。
+        if cfg.maxrate_kbps > 0 {
+            Some(cfg.maxrate_kbps)
+        } else {
+            Some(desired)
+        }
+    } else if v_kbps > 0 {
         if locked {
             let c = desired.min(source_ceiling_ref).max(MIN_CEILING_KBPS);
             if c < desired {
@@ -184,13 +201,22 @@ pub fn plan_rate(
     };
 
     if class == CodecClass::Efficient && *mode == ExportMode::Precise {
+        let codec_name = info.video.codec.as_deref().unwrap_or("高效编码");
+        let explanation = if is_720p_preset {
+            format!(
+                "源片为 {} 高效编码，压缩效率显著高于 H.264。重编码为全平台兼容的 H.264 时，需要更多码率才能维持同等画质。若画面运动剧烈容易出马赛克，建议选「一档·防马赛克」；若追求体积紧凑防膨胀，可切到「三档·极致紧凑」。",
+                codec_name
+            )
+        } else {
+            format!(
+                "源片是 {}，压缩效率高于 H.264。按源片码率重编码为 H.264 能控制体积，但画质必然下降（H.264 需要更多码率才能追平同等画质）。若不需要剪辑，建议用「无损模式」流拷贝，画质与体积都不变；若既要剪辑又要更接近原片画质，只能在自定义方案里调高目标码率，体积会随之变大。只交付 H.264 时，这是无法绕开的取舍。",
+                codec_name
+            )
+        };
         notes.push((
             "warn".into(),
             "源片为高效编码，重编码会掉画质".into(),
-            format!(
-                "源片是 {}，压缩效率高于 H.264。按源片码率重编码为 H.264 能控制体积，但画质必然下降（H.264 需要更多码率才能追平同等画质）。若不需要剪辑，建议用「无损模式」流拷贝，画质与体积都不变；若既要剪辑又要更接近原片画质，只能在自定义方案里调高目标码率，体积会随之变大。只交付 H.264 时，这是无法绕开的取舍。",
-                info.video.codec.as_deref().unwrap_or("高效编码")
-            ),
+            explanation,
         ));
     }
 
@@ -201,12 +227,14 @@ pub fn plan_rate(
     if vbps <= 0 {
         // NEVER silently fall back to high-quality CRF 18: that is exactly what
         // produced the 4x size explosion. Use a conservative CRF + a ceiling.
-        crf = 23;
+        if !is_720p_preset {
+            crf = 23;
+        }
         no_bitrate = true;
         notes.push((
             "warn".into(),
             "未读到源片码率".into(),
-            "无法从 ffprobe 读取源片码率，已改用保守的 CRF 23 并加峰值上限，避免静默启用高质量重编码导致体积暴涨。".into(),
+            "无法从 ffprobe 读取源片码率，已改用保守的 CRF 并加峰值上限，避免静默启用高质量重编码导致体积暴涨。".into(),
         ));
     } else if rc == "crf" {
         // Quality-driven mode: no -b:v, ceiling (if any) is applied below.
@@ -308,16 +336,15 @@ mod tests {
     }
 
     #[test]
-    fn builtin_720p_ceiling_never_exceeds_source() {
+    fn builtin_720p_keeps_tier_recipe_on_low_bitrate_av1() {
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&info("av1", 677, 128), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
         assert_eq!(p.video_bps, None); // CRF mode
         assert_eq!(p.crf, 27); // 自动匹配 T2
-        // av1 677 * 1.25 = 846 kbps
-        assert_eq!(p.maxrate_kbps, Some(846)); // clamped down from 950
-        assert_eq!(p.bufsize_kbps, Some(1603)); // 1800/950 * 846
+        assert_eq!(p.maxrate_kbps, Some(950)); // keeps T2 950k ceiling without being clamped to 846k
+        assert_eq!(p.bufsize_kbps, Some(1800)); // keeps T2 1800k buffer
         assert_eq!(p.audio_bps, Some(96000)); // min(96, 128)
-        assert!(p.notes.iter().any(|(_, t, _)| t.contains("调整")));
+        assert!(!p.notes.iter().any(|(_, t, _)| t.contains("峰值上限已按源片合理调整")));
     }
 
     #[test]
