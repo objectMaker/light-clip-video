@@ -94,6 +94,39 @@ export function SettingsPanel({ app }: { app: AppApi }) {
   const a = app.srcInfo?.audio || {}
   const f = app.srcInfo?.format || {}
 
+  const adaptiveTarget = useMemo(() => {
+    const vid = app.srcInfo?.video
+    const height = vid?.height || 0
+    const vkbps = vid?.video_kbps || 0
+    const fps = vid?.fps_float || 0
+    const codec = (vid?.codec || '').toLowerCase()
+    const isEfficient = ['av1', 'av01', 'vp9', 'hevc', 'h265'].some((c) => codec.includes(c))
+    const effectiveKbps = isEfficient ? Math.round(vkbps * 1.35) : vkbps
+
+    if ((height > 0 && height <= 540) || (effectiveKbps > 0 && effectiveKbps < 800)) {
+      return {
+        id: 'builtin_720p_t3' as const,
+        name: '三档 · 极致紧凑',
+        tagline: 'CRF 28 / 峰值 900k / 音频 96k',
+        reason: '源片本身码率/分辨率较低，分配三档极致紧凑，避免二次重编码体积虚胖浪费。',
+      }
+    }
+    if (fps >= 49.0 || (height >= 1080 && effectiveKbps >= 2500) || effectiveKbps >= 2200) {
+      return {
+        id: 'builtin_720p_t1' as const,
+        name: '一档 · 防马赛克',
+        tagline: 'CRF 26 / 峰值 1000k / 音频 96k',
+        reason: '检测到画面包含高帧率或丰富高动态细节，自动升为一档以抑制镜头晃动马赛克。',
+      }
+    }
+    return {
+      id: 'builtin_720p_t2' as const,
+      name: '二档 · 标准主力',
+      tagline: 'CRF 27 / 峰值 950k / 音频 96k',
+      reason: '源片为标准正常片源，优先分配二档标准主力，兼顾扎实画质与精简体积。',
+    }
+  }, [app.srcInfo])
+
   const scrollTo = (id: string) => {
     setNav(id)
     if (id === 'paramsTitle' && !custom) {
@@ -143,14 +176,15 @@ export function SettingsPanel({ app }: { app: AppApi }) {
             </Button>
           ))}
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-1.5 pb-1.5">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-1.5 pb-1.5">
           {(app.profiles.length > 0
             ? app.profiles
             : [
                 { id: 'source', label: '沿用原片', tagline: '什么都不改', detail: '' },
-                { id: 'builtin_720p', label: '720p 均衡(推荐)', tagline: 'CRF 25 / 900k', detail: '' },
-                { id: 'builtin_720p_t1', label: '720p 优质', tagline: 'CRF 24 / 1000k', detail: '' },
-                { id: 'builtin_720p_t3', label: '720p 紧凑', tagline: 'CRF 26 / 800k', detail: '' },
+                { id: 'builtin_720p', label: '720p 智能自适应', tagline: '算法毫秒匹配', detail: '' },
+                { id: 'builtin_720p_t1', label: '一档 · 防马赛克', tagline: 'CRF 26 / 1000k', detail: '' },
+                { id: 'builtin_720p_t2', label: '二档 · 标准主力', tagline: 'CRF 27 / 950k', detail: '' },
+                { id: 'builtin_720p_t3', label: '三档 · 极致紧凑', tagline: 'CRF 28 / 900k', detail: '' },
                 { id: 'custom', label: '自定义', tagline: '全部参数开放', detail: '' },
               ]
           ).map((p) => (
@@ -168,6 +202,79 @@ export function SettingsPanel({ app }: { app: AppApi }) {
             </button>
           ))}
         </div>
+        {app.profileMode === 'builtin_720p' && (
+          <div className="mb-2 rounded-lg border border-primary/30 bg-primary/5 p-2.5 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
+                <span className="font-semibold text-foreground">
+                  算法决策预设：已自动匹配【{adaptiveTarget.name}】
+                </span>
+                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-mono text-primary">
+                  {adaptiveTarget.tagline}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">更改为：</span>
+                <button
+                  type="button"
+                  onClick={() => app.setProfileMode('builtin_720p_t1')}
+                  className={`rounded border px-2 py-0.5 text-xs transition-colors ${
+                    adaptiveTarget.id === 'builtin_720p_t1'
+                      ? 'border-primary bg-primary/10 font-semibold text-primary'
+                      : 'border-input hover:border-primary hover:bg-background'
+                  }`}
+                  title="强制指定为一档：CRF 26 / 峰值 1000k"
+                >
+                  一档 (防马赛克)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => app.setProfileMode('builtin_720p_t2')}
+                  className={`rounded border px-2 py-0.5 text-xs transition-colors ${
+                    adaptiveTarget.id === 'builtin_720p_t2'
+                      ? 'border-primary bg-primary/10 font-semibold text-primary'
+                      : 'border-input hover:border-primary hover:bg-background'
+                  }`}
+                  title="强制指定为二档：CRF 27 / 峰值 950k"
+                >
+                  二档 (标准主力)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => app.setProfileMode('builtin_720p_t3')}
+                  className={`rounded border px-2 py-0.5 text-xs transition-colors ${
+                    adaptiveTarget.id === 'builtin_720p_t3'
+                      ? 'border-primary bg-primary/10 font-semibold text-primary'
+                      : 'border-input hover:border-primary hover:bg-background'
+                  }`}
+                  title="强制指定为三档：CRF 28 / 峰值 900k"
+                >
+                  三档 (极致紧凑)
+                </button>
+              </div>
+            </div>
+            <p className="mt-1 text-muted-foreground">{adaptiveTarget.reason}</p>
+          </div>
+        )}
+        {['builtin_720p_t1', 'builtin_720p_t2', 'builtin_720p_t3'].includes(app.profileMode) && (
+          <div className="mb-2 flex items-center justify-between rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+            <span>
+              📌 <b>当前已手动指定档位</b>：
+              {app.profileMode === 'builtin_720p_t1' && '一档 · 防马赛克 (CRF 26 / 峰值 1000k / 音频 96k)'}
+              {app.profileMode === 'builtin_720p_t2' && '二档 · 标准主力 (CRF 27 / 峰值 950k / 音频 96k)'}
+              {app.profileMode === 'builtin_720p_t3' && '三档 · 极致紧凑 (CRF 28 / 峰值 900k / 音频 96k)'}
+            </span>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => app.setProfileMode('builtin_720p')}
+              className="text-primary hover:text-primary"
+            >
+              ↺ 恢复算法智能自适应
+            </Button>
+          </div>
+        )}
         <div className="mb-2 rounded-lg bg-muted px-2.5 py-1.5 text-xs leading-relaxed text-muted-foreground">
           {!app.srcInfo || !v.width
             ? '打开视频后自动读取并回显原片参数（编码、分辨率、帧率、位深、码率、音频、体积）。'
