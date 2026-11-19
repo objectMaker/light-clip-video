@@ -3,7 +3,13 @@
 export type BoundaryKind = 'time' | 'cue'
 export type CueEdge = 'start' | 'end'
 export type ExportMode = 'precise' | 'lossless'
-export type ProfileMode = 'source' | 'builtin_720p' | 'custom'
+export type ProfileMode =
+  | 'source'
+  | 'builtin_720p'
+  | 'builtin_720p_t1'
+  | 'builtin_720p_t2'
+  | 'builtin_720p_t3'
+  | 'custom'
 
 export interface CueRef {
   track_id: string

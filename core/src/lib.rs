@@ -32,8 +32,10 @@ pub use paths::{
 };
 pub use plan::{build_export_plan, ExportPlan};
 pub use presets::{
-    profile_catalog, resolve_profile, Bullet, ProfileCatalogEntry, ResolvedProfile, builtin_720p,
-    BUILTIN_720P_SPEED, PROFILE_720P, PROFILE_CUSTOM, PROFILE_IDS, PROFILE_SOURCE,
+    adaptive_720p_preset, builtin_720p, builtin_720p_t1, builtin_720p_t2, builtin_720p_t3,
+    profile_catalog, resolve_profile, Bullet, ProfileCatalogEntry, ResolvedProfile,
+    BUILTIN_720P_SPEED, PROFILE_720P, PROFILE_720P_T1, PROFILE_720P_T2, PROFILE_720P_T3,
+    PROFILE_CUSTOM, PROFILE_IDS, PROFILE_SOURCE,
 };
 pub use probe::{
     parse_encode_params, parse_keyframes_csv, parse_source, parse_subtitle_streams, snap_down,

@@ -143,23 +143,28 @@ export function SettingsPanel({ app }: { app: AppApi }) {
             </Button>
           ))}
         </div>
-        <div className="grid grid-cols-3 gap-1.5 pb-1.5">
-          {[
-            { id: 'source', title: '① 沿用原片', sub: '什么都不改' },
-            { id: 'builtin_720p', title: '② 720p 省体积', sub: '你的预设' },
-            { id: 'custom', title: '③ 自定义', sub: '全部参数开放' },
-          ].map((p) => (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-1.5 pb-1.5">
+          {(app.profiles.length > 0
+            ? app.profiles
+            : [
+                { id: 'source', label: '沿用原片', tagline: '什么都不改', detail: '' },
+                { id: 'builtin_720p', label: '720p 均衡(推荐)', tagline: 'CRF 25 / 900k', detail: '' },
+                { id: 'builtin_720p_t1', label: '720p 优质', tagline: 'CRF 24 / 1000k', detail: '' },
+                { id: 'builtin_720p_t3', label: '720p 紧凑', tagline: 'CRF 26 / 800k', detail: '' },
+                { id: 'custom', label: '自定义', tagline: '全部参数开放', detail: '' },
+              ]
+          ).map((p) => (
             <button
               key={p.id}
               type="button"
-              onClick={() => app.setProfileMode(p.id as 'source' | 'builtin_720p' | 'custom')}
+              onClick={() => app.setProfileMode(p.id as any)}
               className={`rounded-lg border px-2 py-1.5 text-left transition-colors ${
                 app.profileMode === p.id ? 'border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]' : 'border-input bg-background hover:border-primary'
               }`}
-              title={p.id === 'source' ? '参数全部锁定为原片值' : p.id === 'builtin_720p' ? '丢 1080p 进来自动压成 720p' : '自己调参数，可保存预设'}
+              title={p.detail || p.tagline}
             >
-              <b className={`block truncate text-xs ${app.profileMode === p.id ? 'text-primary' : ''}`}>{p.title}</b>
-              <span className="block truncate text-xs text-muted-foreground">{p.sub}</span>
+              <b className={`block truncate text-xs ${app.profileMode === p.id ? 'text-primary' : ''}`}>{p.label}</b>
+              <span className="block truncate text-xs text-muted-foreground">{p.tagline}</span>
             </button>
           ))}
         </div>

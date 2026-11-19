@@ -14,6 +14,7 @@ import type {
   SrcInfo,
   Boundary,
   Clip,
+  ProfileMode,
 } from '../types'
 import { fmt } from '../lib/format'
 import { advanceOutput, buildOutputLane, cloneClip, copyClip, insertClip, isWholeFileProject, makeWholeClips, moveClip, outputToSource, renameClip, splitClipAt, timeBoundary } from '../lib/clips'
@@ -92,7 +93,7 @@ export function useAppState() {
   const [outputMs, setOutputMs] = useState<number | null>(null)
   const [followSeg, setFollowSeg] = useState(-1)
   const [cueLoopOn, setCueLoopOn] = useState(false)
-  const [profileMode, setProfileModeState] = useState<'source' | 'builtin_720p' | 'custom'>('source')
+  const [profileMode, setProfileModeState] = useState<ProfileMode>('source')
   const [mode, setMode] = useState<'precise' | 'lossless'>('precise')
   const [presetSpeed, setPresetSpeed] = useState('medium')
   const [embedSubs, setEmbedSubs] = useState(false)
@@ -1282,7 +1283,7 @@ export function useAppState() {
 
   // --- profiles & presets ---------------------------------------------------
   const setProfileModeFull = useCallback(
-    (m: 'source' | 'builtin_720p' | 'custom') => {
+    (m: ProfileMode) => {
       setProfileModeState(m)
       profileModeRef.current = m
       const p = projectRef.current
@@ -1291,7 +1292,7 @@ export function useAppState() {
         setProject(next)
         projectRef.current = next
       }
-      if (m === 'builtin_720p' && modeRef.current === 'lossless') {
+      if (m.startsWith('builtin_720p') && modeRef.current === 'lossless') {
         setMode('precise')
         modeRef.current = 'precise'
         const p2 = projectRef.current

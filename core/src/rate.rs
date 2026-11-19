@@ -285,10 +285,10 @@ mod tests {
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&info("av1", 677, 128), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
         assert_eq!(p.video_bps, None); // CRF mode
-        assert_eq!(p.crf, 24);
+        assert_eq!(p.crf, 25);
         // av1 677 * 1.25 = 846 kbps
-        assert_eq!(p.maxrate_kbps, Some(846)); // clamped down from 1100
-        assert_eq!(p.bufsize_kbps, Some(1538)); // 2000/1100 * 846
+        assert_eq!(p.maxrate_kbps, Some(846)); // clamped down from 900
+        assert_eq!(p.bufsize_kbps, Some(1504)); // 1600/900 * 846
         assert_eq!(p.audio_bps, Some(96000)); // min(96, 128)
         assert!(p.notes.iter().any(|(_, t, _)| t.contains("调整")));
     }
@@ -297,8 +297,23 @@ mod tests {
     fn high_bitrate_source_keeps_recipe_ceiling() {
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&info("h264", 8000, 192), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
-        assert_eq!(p.maxrate_kbps, Some(1100));
-        assert_eq!(p.ceiling_kbps, Some(1100));
+        assert_eq!(p.maxrate_kbps, Some(900));
+        assert_eq!(p.ceiling_kbps, Some(900));
+    }
+
+    #[test]
+    fn presets_t1_and_t3_rates() {
+        let t1_cfg = crate::presets::builtin_720p_t1();
+        let p1 = plan_rate(&info("h264", 8000, 192), &t1_cfg, true, "builtin_720p_t1", &ExportMode::Precise, 18);
+        assert_eq!(p1.crf, 24);
+        assert_eq!(p1.maxrate_kbps, Some(1000));
+        assert_eq!(p1.bufsize_kbps, Some(1800));
+
+        let t3_cfg = crate::presets::builtin_720p_t3();
+        let p3 = plan_rate(&info("h264", 8000, 192), &t3_cfg, true, "builtin_720p_t3", &ExportMode::Precise, 18);
+        assert_eq!(p3.crf, 26);
+        assert_eq!(p3.maxrate_kbps, Some(800));
+        assert_eq!(p3.bufsize_kbps, Some(1400));
     }
 
     #[test]

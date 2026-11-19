@@ -794,16 +794,16 @@ mod tests {
     #[test]
     fn builtin_720p_clamps_ceiling_and_buffer_to_source() {
         let (cmd, _) = cmd_for("builtin_720p", av1_info());
-        assert_eq!(value_after(&cmd, "-crf"), "24");
-        assert_eq!(value_after(&cmd, "-maxrate"), "846k"); // clamped down from 1100k with 1.25x AV1 compensation
-        assert_eq!(value_after(&cmd, "-bufsize"), "1538k"); // 2000/1100 * 846
+        assert_eq!(value_after(&cmd, "-crf"), "25");
+        assert_eq!(value_after(&cmd, "-maxrate"), "846k"); // clamped down from 900k with 1.25x AV1 compensation
+        assert_eq!(value_after(&cmd, "-bufsize"), "1504k"); // 1600/900 * 846
         assert_eq!(value_after(&cmd, "-b:a"), "96000");
     }
 
     #[test]
     fn builtin_720p_keeps_recipe_on_high_bitrate_source() {
         let (cmd, _) = cmd_for("builtin_720p", info());
-        assert_eq!(value_after(&cmd, "-maxrate"), "1100k");
-        assert_eq!(value_after(&cmd, "-bufsize"), "2000k");
+        assert_eq!(value_after(&cmd, "-maxrate"), "900k");
+        assert_eq!(value_after(&cmd, "-bufsize"), "1600k");
     }
 }
