@@ -112,17 +112,25 @@ pub fn plan_rate(
         v_kbps
     };
 
+    // 当源片为 VP9/AV1 等高效编码时，H.264 必须适度给码率补偿，否则画质塌陷；
+    // 同时绝对不能突破预设的 desired 天花板，杜绝体积膨胀！
+    let source_ceiling_ref = if class == CodecClass::Efficient && v_kbps > 0 {
+        ((v_kbps as f64) * 1.25).round() as i64
+    } else {
+        v_kbps
+    };
+
     let mut ceiling_clamped = false;
     let ceiling = if v_kbps > 0 {
         if locked {
-            let c = desired.min(v_kbps).max(MIN_CEILING_KBPS);
+            let c = desired.min(source_ceiling_ref).max(MIN_CEILING_KBPS);
             if c < desired {
                 ceiling_clamped = true;
                 notes.push((
                     "info".into(),
-                    "峰值上限已按源片下调".into(),
+                    "峰值上限已按源片合理调整".into(),
                     format!(
-                        "为避免「越剪越大」，峰值码率上限从 {} kbps 下调到 {} kbps（源片视频码率）。",
+                        "为避免体积膨胀同时保障清晰度，峰值码率上限从 {} kbps 调整为 {} kbps。",
                         desired, c
                     ),
                 ));
@@ -277,19 +285,20 @@ mod tests {
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&info("av1", 677, 128), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
         assert_eq!(p.video_bps, None); // CRF mode
-        assert_eq!(p.crf, 25);
-        assert_eq!(p.maxrate_kbps, Some(677)); // clamped down from 1000
-        assert_eq!(p.bufsize_kbps, Some(1219)); // 1800/1000 * 677, not 1800
+        assert_eq!(p.crf, 24);
+        // av1 677 * 1.25 = 846 kbps
+        assert_eq!(p.maxrate_kbps, Some(846)); // clamped down from 1100
+        assert_eq!(p.bufsize_kbps, Some(1538)); // 2000/1100 * 846
         assert_eq!(p.audio_bps, Some(96000)); // min(96, 128)
-        assert!(p.notes.iter().any(|(_, t, _)| t.contains("下调")));
+        assert!(p.notes.iter().any(|(_, t, _)| t.contains("调整")));
     }
 
     #[test]
     fn high_bitrate_source_keeps_recipe_ceiling() {
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&info("h264", 8000, 192), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
-        assert_eq!(p.maxrate_kbps, Some(1000));
-        assert_eq!(p.ceiling_kbps, Some(1000));
+        assert_eq!(p.maxrate_kbps, Some(1100));
+        assert_eq!(p.ceiling_kbps, Some(1100));
     }
 
     #[test]

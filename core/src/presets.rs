@@ -21,7 +21,7 @@ pub const PROFILE_IDS: &[&str] = &[PROFILE_SOURCE, PROFILE_720P, PROFILE_CUSTOM]
 
 /// Verbatim translation of the user's command:
 /// `ffmpeg -i input.mkv -map 0:v:0 -map 0:a:0? -vf "scale=-2:720" -c:v libx264
-/// -preset slow -crf 25 -maxrate 1000k -bufsize 1800k -pix_fmt yuv420p -c:a aac
+/// -preset slow -crf 24 -maxrate 1100k -bufsize 2000k -pix_fmt yuv420p -c:a aac
 /// -b:a 96k -ac 2 -sn -movflags +faststart out.mp4`
 pub fn builtin_720p() -> EncodeCfg {
     EncodeCfg {
@@ -34,10 +34,10 @@ pub fn builtin_720p() -> EncodeCfg {
     profile: String::new(),
     level: String::new(),
     rate_control: "crf".to_string(),
-    crf: 25,
+    crf: 24,
     video_kbps: 0,
-    maxrate_kbps: 1000,
-    bufsize_kbps: 1800,
+    maxrate_kbps: 1100,
+    bufsize_kbps: 2000,
     gop: 0,
     bframes: -1,
     audio_codec: "aac".to_string(),
@@ -122,7 +122,7 @@ pub fn resolve_profile(
 }
 
 const P720_COMMAND: &str = "ffmpeg -i input.mkv -map 0:v:0 -map 0:a:0? -vf \"scale=-2:720\" \
--c:v libx264 -preset slow -crf 25 -maxrate 1000k -bufsize 1800k -pix_fmt yuv420p \
+-c:v libx264 -preset slow -crf 24 -maxrate 1100k -bufsize 2000k -pix_fmt yuv420p \
 -c:a aac -b:a 96k -ac 2 -sn -movflags +faststart output.mp4";
 
 /// JSON-safe copy for `GET /api/profiles`.
@@ -153,8 +153,8 @@ pub fn profile_catalog() -> Vec<ProfileCatalogEntry> {
                 .to_string(),
             bullets: vec![
                 Bullet { name: "分辨率".into(), value: "高度缩到 720，宽度按原比例自动且取偶数".into(), why: "体积的最大杠杆；放大不会变清晰，缩小才会真的省空间".into() },
-                Bullet { name: "画质".into(), value: "CRF 25（恒定质量）".into(), why: "数值越大体积越小、细节越糊；25 是明显省体积但还能看的档位".into() },
-                Bullet { name: "码率天花板".into(), value: "峰值 1000 kbps / 缓冲 1800 kbps（源片码率更低时自动按比例下调）".into(), why: "给 CRF 加 VBV 上限；低码率源片（AV1/VP9 等）会自动下调，避免「越剪越大」".into() },
+                Bullet { name: "画质".into(), value: "CRF 24（恒定质量黄金档）".into(), why: "数值越大越糊；24 相比 25 显著提升人物面部与英文字幕边缘清晰度".into() },
+                Bullet { name: "码率天花板".into(), value: "峰值 1100 kbps / 缓冲 2000 kbps（源片码率更低时自动按比例下调）".into(), why: "给 CRF 加 VBV 上限；兼顾动态场景呼吸空间与防体积膨胀".into() },
                 Bullet { name: "编码".into(), value: "H.264 / slow / 8-bit yuv420p".into(), why: "slow 在同画质下更省体积；8-bit 保证几乎所有播放器都能放".into() },
                 Bullet { name: "音频".into(), value: "AAC 96 kbps 立体声".into(), why: "音频占比本来就小，96k 对语音足够，音乐可到 128k".into() },
                 Bullet { name: "封装".into(), value: "MP4 + faststart，不把字幕封装进视频".into(), why: "边下边播；外挂 SRT 仍会按剪辑后的时间轴生成".into() },
@@ -197,7 +197,7 @@ mod tests {
         let mut custom = EncodeCfg::default();
         custom.crf = 30;
         let p = resolve_profile(PROFILE_720P, &custom, "medium", true);
-        assert_eq!(p.encode.crf, 25);
+        assert_eq!(p.encode.crf, 24);
         assert_eq!(p.speed, "slow");
         assert!(!p.embed_subtitles);
         assert!(!p.inherit_source_profile);

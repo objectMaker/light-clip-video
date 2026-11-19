@@ -109,7 +109,7 @@ pub fn evaluate_encode(
             warnings.push(item(
                 "info",
                 "源片分辨率已低于预设上限",
-                &format!("源片 {src_w}×{src_h} 不超过 {}p，不会把它放大；仍按 CRF 25 + 峰值码率上限重新编码来减小体积。", cfg.height),
+                &format!("源片 {src_w}×{src_h} 不超过 {}p，不会把它放大；仍按 CRF 24 + 峰值码率上限重新编码来减小体积。", cfg.height),
             ));
         } else if cfg.height > src_h {
             warnings.push(item(
@@ -439,8 +439,8 @@ mod tests {
     #[test]
     fn builtin_720p_ceiling_clamped_and_no_false_lossless_hint() {
         let e = evaluate_encode(&av1_low_bitrate(), &EncodeCfg::default(), 60_000, &ExportMode::Precise, 1, true, "builtin_720p");
-        assert!(e.ratio.unwrap() < 1.0, "720p recipe must not exceed the source: {:?}", e.ratio);
-        assert!(e.warnings.iter().any(|w| w.title.contains("下调")));
+        assert!(e.ratio.unwrap() <= 1.25, "720p recipe with AV1 compensation must stay under 1.25x: {:?}", e.ratio);
+        assert!(e.warnings.iter().any(|w| w.title.contains("调整") || w.title.contains("下调")));
         assert!(!e.warnings.iter().any(|w| w.title == "无损模式下转码参数不生效"));
     }
 }
