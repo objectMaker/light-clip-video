@@ -33,8 +33,48 @@ fn find_web_dir(resource_dir: &Path) -> PathBuf {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let is_headless = args.iter().any(|a| a == "--headless");
+    let requested_port: Option<u16> = args.iter().skip(1).find_map(|a| {
+        if a.starts_with("--port=") {
+            a.trim_start_matches("--port=").parse::<u16>().ok()
+        } else {
+            a.parse::<u16>().ok().filter(|&p| p > 0)
+        }
+    }).or_else(|| {
+        std::env::var("CLIP_SERVER_PORT").ok().and_then(|p| p.parse().ok())
+    });
+
+    if is_headless {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let web_dir = find_web_dir(&exe_dir);
+        let (ffmpeg_bin, ffprobe_bin) =
+            clip_server::ffmpeg::resolve_bins(&exe_dir, None, None);
+
+        let target_port = requested_port.unwrap_or(8765);
+        let listener = std::net::TcpListener::bind(format!("127.0.0.1:{}", target_port))
+            .or_else(|_| std::net::TcpListener::bind("127.0.0.1:0"))
+            .expect("Failed to bind TCP listener");
+        let port = listener.local_addr().unwrap().port();
+
+        let cfg = clip_server::ServerConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            web_dir,
+            ffmpeg_bin,
+            ffprobe_bin,
+            autosave_dir: home().join(".clip-video").join("autosave"),
+            out_dir: home().join(".clip-video").join("output"),
+        };
+        clip_server::run_with_listener(listener, cfg).expect("error running headless server");
+        return;
+    }
+
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             let resource_dir = app
                 .path()
                 .resource_dir()
@@ -44,9 +84,11 @@ fn main() {
             let (ffmpeg_bin, ffprobe_bin) =
                 clip_server::ffmpeg::resolve_bins(&resource_dir, None, None);
 
-            // Bind the port here so the webview can be pointed at it with no
-            // readiness race.
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+            // Bind to requested port (default 8765) so pipeline can discover it directly,
+            // falling back to ephemeral port if already in use.
+            let target_port = requested_port.unwrap_or(8765);
+            let listener = std::net::TcpListener::bind(format!("127.0.0.1:{}", target_port))
+                .or_else(|_| std::net::TcpListener::bind("127.0.0.1:0"))?;
             let port = listener.local_addr()?.port();
 
             let cfg = clip_server::ServerConfig {
