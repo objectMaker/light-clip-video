@@ -38,6 +38,8 @@ pub struct ExportPlan {
     pub subtitles: HashMap<String, String>,
     pub subtitle_format: String,
     pub warnings: Vec<String>,
+    pub adaptive_tier: Option<String>,
+    pub adaptive_reason: Option<String>,
 }
 
 fn sec(ms: i64) -> String {
@@ -130,6 +132,8 @@ pub fn build_export_plan(
     }
 
     let mut warnings: Vec<String> = Vec::new();
+    let mut adaptive_tier: Option<String> = None;
+    let mut adaptive_reason: Option<String> = None;
     let requested_container = if cfg.container == "mp4" || cfg.container == "mkv" {
         cfg.container.clone()
     } else {
@@ -375,6 +379,13 @@ pub fn build_export_plan(
                     video_options.push(format!("{}k", buf));
                 }
             }
+            if adaptive_tier.is_none() && rate.adaptive_tier.is_some() {
+                adaptive_tier = rate.adaptive_tier.clone();
+                adaptive_reason = rate.adaptive_reason.clone();
+                if let (Some(tier), Some(reason)) = (&adaptive_tier, &adaptive_reason) {
+                    warnings.push(format!("ℹ 720p 自适应算法决策：命中【{}】（{}）", tier, reason));
+                }
+            }
 
             let (audio_map, audio_options) = match cfg.audio_codec.as_str() {
                 "none" => (vec!["-an".into()], vec!["-an".into()]),
@@ -548,6 +559,8 @@ pub fn build_export_plan(
         subtitles,
         subtitle_format: sub_fmt.to_string(),
         warnings,
+        adaptive_tier,
+        adaptive_reason,
     })
 }
 
@@ -799,23 +812,23 @@ mod tests {
     #[test]
     fn builtin_720p_uses_tier_preset_on_av1_source() {
         let (cmd, _) = cmd_for("builtin_720p", av1_info());
-        assert_eq!(value_after(&cmd, "-crf"), "27"); // 720p 677k AV1 动态源片自动匹配 T1 防马赛克 (CRF 27)
+        assert_eq!(value_after(&cmd, "-crf"), "28"); // 720p 677k AV1 动态源片自动匹配 T1 防马赛克 (CRF 28)
         assert_eq!(value_after(&cmd, "-maxrate"), "1100k"); // T1 1100k 峰值
         assert_eq!(value_after(&cmd, "-bufsize"), "2200k"); // T1 2200k 缓冲
         assert_eq!(value_after(&cmd, "-b:a"), "96000");
 
         let (cmd_t1, _) = cmd_for("builtin_720p_t1", av1_info());
-        assert_eq!(value_after(&cmd_t1, "-crf"), "27"); // T1 一档防马赛克 (CRF 27)
+        assert_eq!(value_after(&cmd_t1, "-crf"), "28"); // T1 一档防马赛克 (CRF 28)
         assert_eq!(value_after(&cmd_t1, "-maxrate"), "1100k"); // T1 1100k 峰值
         assert_eq!(value_after(&cmd_t1, "-bufsize"), "2200k"); // T1 2200k 缓冲区
 
         let (cmd_t2, _) = cmd_for("builtin_720p_t2", av1_info());
-        assert_eq!(value_after(&cmd_t2, "-crf"), "27"); // T2 二档标准主力
+        assert_eq!(value_after(&cmd_t2, "-crf"), "28"); // T2 二档标准主力 (CRF 28)
         assert_eq!(value_after(&cmd_t2, "-maxrate"), "950k"); // T2 950k
         assert_eq!(value_after(&cmd_t2, "-bufsize"), "1800k"); // T2 1800k
 
         let (cmd_t3, _) = cmd_for("builtin_720p_t3", av1_info());
-        assert_eq!(value_after(&cmd_t3, "-crf"), "28"); // T3 三档极致紧凑
+        assert_eq!(value_after(&cmd_t3, "-crf"), "29"); // T3 三档极致紧凑 (CRF 29)
         assert_eq!(value_after(&cmd_t3, "-maxrate"), "900k"); // T3 900k
         assert_eq!(value_after(&cmd_t3, "-bufsize"), "1700k"); // T3 1700k
     }
@@ -823,7 +836,7 @@ mod tests {
     #[test]
     fn builtin_720p_keeps_recipe_on_high_bitrate_source() {
         let (cmd, _) = cmd_for("builtin_720p", info());
-        assert_eq!(value_after(&cmd, "-crf"), "27"); // 1080p 优质大片自动升级 T1 防马赛克 (CRF 27)
+        assert_eq!(value_after(&cmd, "-crf"), "28"); // 1080p 优质大片自动升级 T1 防马赛克 (CRF 28)
         assert_eq!(value_after(&cmd, "-maxrate"), "1100k");
         assert_eq!(value_after(&cmd, "-bufsize"), "2200k");
     }

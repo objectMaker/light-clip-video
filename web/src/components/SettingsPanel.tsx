@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, HelpCircle, Info, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,8 +8,9 @@ import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { fmt, fmtMB, basename } from '@/lib/format'
-import { BASIC_KEYS, CUSTOM_VALUE, ENCODE_SPECS, countEncodeChanges, customConfig, defaultEncode, type EncodeSpec } from '@/lib/encode'
-import { loadPresets, savePresets, downloadJson, readFileAsText } from '@/lib/storage'
+import { BASIC_KEYS, CUSTOM_VALUE, ENCODE_SPECS, countEncodeChanges, customConfig, defaultEncode, encodeToValues, type EncodeSpec } from '@/lib/encode'
+import { loadPresets, savePresets, downloadJson, readFileAsText, fetchServerCustomPresets } from '@/lib/storage'
+import { apiClient } from '@/api'
 import type { AppApi } from '@/hooks/useAppState'
 
 function EncodeField({
@@ -83,8 +84,16 @@ function EncodeField({
 export function SettingsPanel({ app }: { app: AppApi }) {
   const [presetNames, setPresetNames] = useState<string[]>(() => Object.keys(loadPresets()).sort())
   const [selectedPreset, setSelectedPreset] = useState('')
+
+  useEffect(() => {
+    fetchServerCustomPresets().then((data) => {
+      setPresetNames(Object.keys(data).sort())
+    })
+  }, [])
   const [nav, setNav] = useState('sec-output')
   const custom = app.profileMode === 'custom'
+  const isTierMode = ['builtin_720p_t1', 'builtin_720p_t2', 'builtin_720p_t3'].includes(app.profileMode)
+  const isEditable = custom || isTierMode
   const lossless = app.mode === 'lossless'
   const profile = app.profiles.find((p) => p.id === app.profileMode) || null
   const enc = app.collectEncodeNow()
@@ -93,6 +102,82 @@ export function SettingsPanel({ app }: { app: AppApi }) {
   const v = app.srcInfo?.video || {}
   const a = app.srcInfo?.audio || {}
   const f = app.srcInfo?.format || {}
+
+  const saveCurrentTier = async () => {
+    try {
+      const currentTierId = app.profileMode as 'builtin_720p_t1' | 'builtin_720p_t2' | 'builtin_720p_t3'
+      const curEnc = app.collectEncodeNow()
+      const data = await apiClient.getTierPresets()
+      const newSettings = { ...data.settings }
+
+      const crf = Number(curEnc.crf) || (currentTierId === 'builtin_720p_t3' ? 29 : 28)
+      const maxrate = Number(curEnc.maxrate_kbps) || (currentTierId === 'builtin_720p_t1' ? 1100 : currentTierId === 'builtin_720p_t2' ? 950 : 900)
+      const bufsize = Number(curEnc.bufsize_kbps) || Math.round(maxrate * 2)
+      const audio = Number(curEnc.audio_kbps) || 96
+      const speed = app.presetSpeed || 'slow'
+
+      const tierTitle = currentTierId === 'builtin_720p_t1' ? '一档 · 防马赛克' : currentTierId === 'builtin_720p_t2' ? '二档 · 标准主力' : '三档 · 极致紧凑'
+      const tierShort = tierTitle.split('·')[1]?.trim() || ''
+      newSettings[currentTierId] = {
+        name: tierTitle,
+        tagline: `${tierShort}：CRF ${crf} / 峰值 ${maxrate}k / 音频 ${audio}k`,
+        crf,
+        maxrate_kbps: maxrate,
+        bufsize_kbps: bufsize,
+        audio_kbps: audio,
+        speed,
+      }
+
+      await apiClient.saveTierPresets(newSettings)
+      await app.refreshProfiles?.()
+      app.notify(`已成功保存【${tierTitle}】预设（CRF ${crf} / 峰值 ${maxrate}k / 音频 ${audio}k / ${speed}）！算法自动命中或手动选择该档时均将生效并永久保留。`)
+    } catch (e) {
+      app.notify(`保存档位预设失败: ${(e as Error).message}`)
+    }
+  }
+
+  const resetCurrentTier = async () => {
+    try {
+      const currentTierId = app.profileMode as 'builtin_720p_t1' | 'builtin_720p_t2' | 'builtin_720p_t3'
+      const data = await apiClient.getTierPresets()
+      const def = data.default[currentTierId]
+      const newSettings = { ...data.settings, [currentTierId]: def }
+      await apiClient.saveTierPresets(newSettings)
+      await app.refreshProfiles?.()
+
+      const { values, customValues } = encodeToValues({
+        video_codec: 'libx264',
+        width: 0,
+        height: 720,
+        scale_mode: 'height',
+        fps: '',
+        pix_fmt: 'yuv420p',
+        profile: '',
+        level: '',
+        rate_control: 'crf',
+        crf: def.crf,
+        video_kbps: 0,
+        maxrate_kbps: def.maxrate_kbps,
+        bufsize_kbps: def.bufsize_kbps,
+        gop: 0,
+        bframes: -1,
+        audio_codec: 'aac',
+        audio_kbps: def.audio_kbps,
+        sample_rate: 0,
+        channels: 2,
+        audio_profile: '',
+        subtitle_format: 'srt',
+        container: 'mp4',
+        faststart: true,
+      }, app.srcInfo, false)
+      app.setEncValues(values)
+      app.setEncCustomValues(customValues)
+      app.setPresetSpeed(def.speed || 'slow')
+      app.notify(`已将【${def.name}】恢复为官方默认配方（CRF ${def.crf} / 峰值 ${def.maxrate_kbps}k）！`)
+    } catch (e) {
+      app.notify(`恢复默认失败: ${(e as Error).message}`)
+    }
+  }
 
   const adaptiveTarget = useMemo(() => {
     const vid = app.srcInfo?.video
@@ -108,8 +193,8 @@ export function SettingsPanel({ app }: { app: AppApi }) {
       return {
         id: 'builtin_720p_t1' as const,
         name: '一档 · 防马赛克',
-        tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
-        reason: '检测到高帧率(>=50fps)动态片源，自动升为一档（CRF 27 / 峰值 1100k）以抑制运动撕裂与马赛克。',
+        tagline: 'CRF 28 / 峰值 1100k / 音频 96k',
+        reason: '检测到高帧率(>=50fps)动态片源，自动升为一档（CRF 28 / 峰值 1100k）以抑制运动撕裂与马赛克。',
       }
     }
 
@@ -118,8 +203,8 @@ export function SettingsPanel({ app }: { app: AppApi }) {
       return {
         id: 'builtin_720p_t3' as const,
         name: '三档 · 极致紧凑',
-        tagline: 'CRF 28 / 峰值 900k / 音频 96k',
-        reason: '源片本身分辨率较低(<=540p)，分配三档极致紧凑（CRF 28 / 峰值 900k），避免二次重编码体积虚胖浪费。',
+        tagline: 'CRF 29 / 峰值 900k / 音频 96k',
+        reason: '源片本身分辨率较低(<=540p)，分配三档极致紧凑（CRF 29 / 峰值 900k），避免二次重编码体积虚胖浪费。',
       }
     }
 
@@ -129,49 +214,49 @@ export function SettingsPanel({ app }: { app: AppApi }) {
         return {
           id: 'builtin_720p_t1' as const,
           name: '一档 · 防马赛克',
-          tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
-          reason: '720p 源片具备充足有效码率与动态细节，自动升为一档（CRF 27 / 峰值 1100k）以杜绝镜头晃动马赛克。',
+          tagline: 'CRF 28 / 峰值 1100k / 音频 96k',
+          reason: '720p 源片具备充足有效码率与动态细节，自动升为一档（CRF 28 / 峰值 1100k）以杜绝镜头晃动马赛克。',
         }
       }
       if ((effectiveKbps > 0 && effectiveKbps < 650) || (isEfficient && vkbps > 0 && vkbps < 450)) {
         return {
           id: 'builtin_720p_t3' as const,
           name: '三档 · 极致紧凑',
-          tagline: 'CRF 28 / 峰值 900k / 音频 96k',
-          reason: '720p 源片码率较为匮乏，分配三档极致紧凑（CRF 28 / 峰值 900k）以防二次转码体积虚胖。',
+          tagline: 'CRF 29 / 峰值 900k / 音频 96k',
+          reason: '720p 源片码率较为匮乏或画面极简（如动画片/课件），分配三档极致紧凑（CRF 29 / 峰值 900k）以防二次转码体积虚胖。',
         }
       }
       return {
         id: 'builtin_720p_t2' as const,
         name: '二档 · 标准主力',
-        tagline: 'CRF 27 / 峰值 950k / 音频 96k',
-        reason: '720p 标准均衡片源，分配二档标准主力（CRF 27 / 峰值 950k），兼顾画质与轻量体积。',
+        tagline: 'CRF 28 / 峰值 950k / 音频 96k',
+        reason: '720p 标准均衡片源，分配二档标准主力（CRF 28 / 峰值 950k），兼顾画质与轻量体积。',
       }
     }
 
     // 4. 1080p 档位 (720p < height <= 1080p)
     if (height > 720 && height <= 1080) {
-      if (effectiveKbps >= 2400) {
+      if (effectiveKbps >= 1800 || (isEfficient && vkbps >= 1200)) {
         return {
           id: 'builtin_720p_t1' as const,
           name: '一档 · 防马赛克',
-          tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
-          reason: '1080p 高清源片且码率充沛，下采样至 720p 时自动升为一档（CRF 27 / 峰值 1100k）保留高保真细节。',
+          tagline: 'CRF 28 / 峰值 1100k / 音频 96k',
+          reason: '1080p 高清源片且动态码率充沛，下采样至 720p 时自动升为一档（CRF 28 / 峰值 1100k）保留高保真细节。',
         }
       }
       if (effectiveKbps > 0 && effectiveKbps < 850) {
         return {
           id: 'builtin_720p_t3' as const,
           name: '三档 · 极致紧凑',
-          tagline: 'CRF 28 / 峰值 900k / 音频 96k',
-          reason: '1080p 源片码率较为紧凑，分配三档极致紧凑（CRF 28 / 峰值 900k），杜绝过度转码浪费。',
+          tagline: 'CRF 29 / 峰值 900k / 音频 96k',
+          reason: '1080p 源片码率较为紧凑，分配三档极致紧凑（CRF 29 / 峰值 900k），杜绝过度转码浪费。',
         }
       }
       return {
         id: 'builtin_720p_t2' as const,
         name: '二档 · 标准主力',
-        tagline: 'CRF 27 / 峰值 950k / 音频 96k',
-        reason: '1080p 常规教学与日常片源，分配二档标准主力（CRF 27 / 峰值 950k），兼顾扎实画质与精简体积。',
+        tagline: 'CRF 28 / 峰值 950k / 音频 96k',
+        reason: '1080p 常规教学与日常片源，分配二档标准主力（CRF 28 / 峰值 950k），兼顾扎实画质与精简体积。',
       }
     }
 
@@ -181,15 +266,15 @@ export function SettingsPanel({ app }: { app: AppApi }) {
         return {
           id: 'builtin_720p_t3' as const,
           name: '三档 · 极致紧凑',
-          tagline: 'CRF 28 / 峰值 900k / 音频 96k',
+          tagline: 'CRF 29 / 峰值 900k / 音频 96k',
           reason: '超清源片码率较低，分配三档极致紧凑以防体积虚胖。',
         }
       }
       return {
         id: 'builtin_720p_t1' as const,
         name: '一档 · 防马赛克',
-        tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
-        reason: '4K/超清高精源片，下采样至 720p 时自动分配一档（CRF 27 / 峰值 1100k）以保留最佳纹理。',
+        tagline: 'CRF 28 / 峰值 1100k / 音频 96k',
+        reason: '4K/超清高精源片，下采样至 720p 时自动分配一档（CRF 28 / 峰值 1100k）以保留最佳纹理。',
       }
     }
 
@@ -198,30 +283,30 @@ export function SettingsPanel({ app }: { app: AppApi }) {
       return {
         id: 'builtin_720p_t1' as const,
         name: '一档 · 防马赛克',
-        tagline: 'CRF 27 / 峰值 1100k / 音频 96k',
-        reason: '源片有效码率充沛，自动分配一档（CRF 27 / 峰值 1100k）防马赛克。',
+        tagline: 'CRF 28 / 峰值 1100k / 音频 96k',
+        reason: '源片有效码率充沛，自动分配一档（CRF 28 / 峰值 1100k）防马赛克。',
       }
     }
     if (effectiveKbps > 0 && effectiveKbps < 800) {
       return {
         id: 'builtin_720p_t3' as const,
         name: '三档 · 极致紧凑',
-        tagline: 'CRF 28 / 峰值 900k / 音频 96k',
-        reason: '源片有效码率较低，自动分配三档极致紧凑（CRF 28 / 峰值 900k）防虚胖。',
+        tagline: 'CRF 29 / 峰值 900k / 音频 96k',
+        reason: '源片有效码率较低，自动分配三档极致紧凑（CRF 29 / 峰值 900k）防虚胖。',
       }
     }
     return {
       id: 'builtin_720p_t2' as const,
       name: '二档 · 标准主力',
-      tagline: 'CRF 27 / 峰值 950k / 音频 96k',
-      reason: '源片码率适中，优先分配二档标准主力（CRF 27 / 峰值 950k）。',
+      tagline: 'CRF 28 / 峰值 950k / 音频 96k',
+      reason: '源片码率适中，优先分配二档标准主力（CRF 28 / 峰值 950k）。',
     }
   }, [app.srcInfo])
 
   const scrollTo = (id: string) => {
     setNav(id)
-    if (id === 'paramsTitle' && !custom) {
-      app.notify('转码参数在 ② 720p / ① 沿用原片 下是锁定的；选 ③ 自定义 才能修改')
+    if (id === 'paramsTitle' && !isEditable) {
+      app.notify('转码参数在「720p 智能自适应」或「沿用原片」下由算法或原片决定；请选 一/二/三档 或 自定义 即可自由调整')
       return
     }
     document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
@@ -273,9 +358,9 @@ export function SettingsPanel({ app }: { app: AppApi }) {
             : [
                 { id: 'source', label: '沿用原片', tagline: '什么都不改', detail: '' },
                 { id: 'builtin_720p', label: '720p 智能自适应', tagline: '算法毫秒匹配', detail: '' },
-                { id: 'builtin_720p_t1', label: '一档 · 防马赛克', tagline: 'CRF 27 / 1100k', detail: '' },
-                { id: 'builtin_720p_t2', label: '二档 · 标准主力', tagline: 'CRF 27 / 950k', detail: '' },
-                { id: 'builtin_720p_t3', label: '三档 · 极致紧凑', tagline: 'CRF 28 / 900k', detail: '' },
+                { id: 'builtin_720p_t1', label: '一档 · 防马赛克', tagline: 'CRF 28 / 1100k', detail: '' },
+                { id: 'builtin_720p_t2', label: '二档 · 标准主力', tagline: 'CRF 28 / 950k', detail: '' },
+                { id: 'builtin_720p_t3', label: '三档 · 极致紧凑', tagline: 'CRF 29 / 900k', detail: '' },
                 { id: 'custom', label: '自定义', tagline: '全部参数开放', detail: '' },
               ]
           ).map((p) => (
@@ -306,7 +391,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">更改为：</span>
+                <span className="text-muted-foreground">微调预设参数：</span>
                 <button
                   type="button"
                   onClick={() => app.setProfileMode('builtin_720p_t1')}
@@ -315,7 +400,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
                       ? 'border-primary bg-primary/10 font-semibold text-primary'
                       : 'border-input hover:border-primary hover:bg-background'
                   }`}
-                  title="强制指定为一档：CRF 27 / 峰值 1100k"
+                  title="调整并保存一档预设：CRF 28 / 峰值 1100k"
                 >
                   一档 (防马赛克)
                 </button>
@@ -327,7 +412,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
                       ? 'border-primary bg-primary/10 font-semibold text-primary'
                       : 'border-input hover:border-primary hover:bg-background'
                   }`}
-                  title="强制指定为二档：CRF 27 / 峰值 950k"
+                  title="调整并保存二档预设：CRF 28 / 峰值 950k"
                 >
                   二档 (标准主力)
                 </button>
@@ -339,7 +424,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
                       ? 'border-primary bg-primary/10 font-semibold text-primary'
                       : 'border-input hover:border-primary hover:bg-background'
                   }`}
-                  title="强制指定为三档：CRF 28 / 峰值 900k"
+                  title="调整并保存三档预设：CRF 29 / 峰值 900k"
                 >
                   三档 (极致紧凑)
                 </button>
@@ -348,22 +433,44 @@ export function SettingsPanel({ app }: { app: AppApi }) {
             <p className="mt-1 text-muted-foreground">{adaptiveTarget.reason}</p>
           </div>
         )}
-        {['builtin_720p_t1', 'builtin_720p_t2', 'builtin_720p_t3'].includes(app.profileMode) && (
-          <div className="mb-2 flex items-center justify-between rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
-            <span>
-              📌 <b>当前已手动指定档位</b>：
-              {app.profileMode === 'builtin_720p_t1' && '一档 · 防马赛克 (CRF 27 / 峰值 1100k / 音频 96k)'}
-              {app.profileMode === 'builtin_720p_t2' && '二档 · 标准主力 (CRF 27 / 峰值 950k / 音频 96k)'}
-              {app.profileMode === 'builtin_720p_t3' && '三档 · 极致紧凑 (CRF 28 / 峰值 900k / 音频 96k)'}
-            </span>
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => app.setProfileMode('builtin_720p')}
-              className="text-primary hover:text-primary"
-            >
-              ↺ 恢复算法智能自适应
-            </Button>
+        {isTierMode && (
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-xs">
+            <div className="flex items-center gap-1.5">
+              <span>
+                ⚙ <b>当前正在配置</b>：
+                {app.profileMode === 'builtin_720p_t1' && '【一档 · 防马赛克】'}
+                {app.profileMode === 'builtin_720p_t2' && '【二档 · 标准主力】'}
+                {app.profileMode === 'builtin_720p_t3' && '【三档 · 极致紧凑】'}
+              </span>
+              <span className="text-muted-foreground">（下方转码参数已开放，修改后点击右侧保存永久生效）</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="xs"
+                onClick={saveCurrentTier}
+                className="h-6 bg-primary text-primary-foreground hover:bg-primary/90 text-xs px-2.5 font-medium"
+                title="将下方修改的参数永久保存为此档预设，自适应算法命中或手动选择该档时均自动生效"
+              >
+                💾 保存为此档预设
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={resetCurrentTier}
+                className="h-6 text-xs px-2"
+                title="恢复此档为官方黄金推荐配方"
+              >
+                ↺ 恢复默认
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => app.setProfileMode('builtin_720p')}
+                className="h-6 text-xs text-primary hover:text-primary px-2"
+              >
+                切回自适应
+              </Button>
+            </div>
           </div>
         )}
         <div className="mb-2 rounded-lg bg-muted px-2.5 py-1.5 text-xs leading-relaxed text-muted-foreground">
@@ -679,14 +786,16 @@ export function SettingsPanel({ app }: { app: AppApi }) {
           同时把字幕封装进视频
         </label>
 
-        {custom && (
+        {isEditable && (
           <>
-            <h3 id="paramsTitle" className="mb-2 border-b pb-1.5 text-xs font-semibold">
-              转码参数{' '}
-              <span className="ml-1 font-normal text-muted-foreground">
-                全部下拉选择 · 悬停 <HelpCircle className="inline size-3.5" /> 看影响 · 仅精确模式生效
-              </span>
-              {lossless && <Badge variant="secondary" className="ml-2">无损模式下忽略</Badge>}
+            <h3 id="paramsTitle" className="mb-2 border-b pb-1.5 text-xs font-semibold flex items-center justify-between">
+              <div>
+                转码参数{' '}
+                <span className="ml-1 font-normal text-muted-foreground">
+                  {isTierMode ? '正在调整当前档位参数 · 调好后点击上方「💾 保存为此档预设」即可永久生效' : '全部下拉选择 · 悬停看影响 · 仅精确模式生效'}
+                </span>
+                {lossless && <Badge variant="secondary" className="ml-2">无损模式下忽略</Badge>}
+              </div>
             </h3>
             <div className={lossless ? 'opacity-50' : ''}>
               <details open className="mb-2 overflow-hidden rounded-lg border">
@@ -721,7 +830,7 @@ export function SettingsPanel({ app }: { app: AppApi }) {
             </details>
           </>
         )}
-        {!custom && <div id="paramsTitle" className="hidden" />}
+        {!isEditable && <div id="paramsTitle" className="hidden" />}
 
         <h3 id="sec-help" className="mb-2 border-b pb-1.5 text-xs font-semibold">
           说明 <span className="ml-1 font-normal text-muted-foreground">两种导出模式到底做了什么</span>

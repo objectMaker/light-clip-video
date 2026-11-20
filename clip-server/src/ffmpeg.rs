@@ -17,13 +17,142 @@ use serde_json::Value;
 
 pub type Progress = dyn Fn(i64, &str);
 
+static ACTIVE_EXPORT_CHILD: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+static ACTIVE_WORKDIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+#[cfg(windows)]
+pub fn init_process_job_object() {
+    use std::os::windows::raw::HANDLE;
+    #[repr(C)]
+    struct IO_COUNTERS {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+    #[repr(C)]
+    struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+    #[repr(C)]
+    struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        basic_limit_information: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        io_info: IO_COUNTERS,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+
+    extern "system" {
+        fn CreateJobObjectW(lpJobAttributes: *mut std::ffi::c_void, lpName: *const u16) -> HANDLE;
+        fn SetInformationJobObject(
+            hJob: HANDLE,
+            JobObjectInformationClass: u32,
+            lpJobObjectInformation: *const std::ffi::c_void,
+            cbJobObjectInformationLength: u32,
+        ) -> i32;
+        fn AssignProcessToJobObject(hJob: HANDLE, hProcess: HANDLE) -> i32;
+        fn GetCurrentProcess() -> HANDLE;
+    }
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+        if !job.is_null() {
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let res = SetInformationJobObject(
+                job,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                &info as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if res != 0 {
+                let _ = AssignProcessToJobObject(job, GetCurrentProcess());
+            }
+            let _ = job;
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn init_process_job_object() {}
+
+pub fn abort_active_export() {
+    if let Ok(mut lock) = ACTIVE_EXPORT_CHILD.lock() {
+        if let Some(pid) = lock.take() {
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(0x0800_0000)
+                    .output();
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .output();
+            }
+        }
+    }
+    if let Ok(mut lock) = ACTIVE_WORKDIR.lock() {
+        if let Some(dir) = lock.take() {
+            for _ in 0..10 {
+                if !dir.exists() || std::fs::remove_dir_all(&dir).is_ok() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+pub fn cleanup_stale_workdirs(parent: &Path) {
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with(".clipvideo-tmp-") || name.starts_with("clipvideo_") {
+                        let _ = std::fs::remove_dir_all(&path);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Removes the export temp dir when the export finishes, whether it
 /// succeeded or failed, so no temp files are left behind.
 struct WorkdirGuard(PathBuf);
 
 impl Drop for WorkdirGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        if let Ok(mut lock) = ACTIVE_WORKDIR.lock() {
+            if lock.as_ref().map_or(false, |p| p == &self.0) {
+                *lock = None;
+            }
+        }
+        for _ in 0..10 {
+            if !self.0.exists() || std::fs::remove_dir_all(&self.0).is_ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }
 
@@ -220,6 +349,10 @@ fn run_ffmpeg_progress(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("无法运行 ffmpeg: {e}"))?;
+    let pid = child.id();
+    if let Ok(mut lock) = ACTIVE_EXPORT_CHILD.lock() {
+        *lock = Some(pid);
+    }
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let (tx, rx) = mpsc::channel::<String>();
@@ -244,6 +377,11 @@ fn run_ffmpeg_progress(
         }
     }
     let status = child.wait().map_err(|e| e.to_string())?;
+    if let Ok(mut lock) = ACTIVE_EXPORT_CHILD.lock() {
+        if lock.as_ref().map_or(false, |&p| p == pid) {
+            *lock = None;
+        }
+    }
     let stderr_out = rx.recv().unwrap_or_default();
     let _ = stderr_thread.join();
     if !status.success() {
@@ -311,13 +449,20 @@ pub fn execute_export(
     // video), not in the system temp dir: no cross-drive copy, and every
     // step of the export happens where the result ends up. The guard below
     // deletes the temp dir when the export returns, success or failure.
-    let workdir = match Path::new(output_path).parent() {
+    let out_parent = Path::new(output_path).parent();
+    if let Some(dir) = out_parent {
+        cleanup_stale_workdirs(dir);
+    }
+    let workdir = match out_parent {
         Some(dir) if !dir.as_os_str().is_empty() => {
             dir.join(format!(".clipvideo-tmp-{}", std::process::id()))
         }
         _ => std::env::temp_dir().join(format!("clipvideo_{}", std::process::id())),
     };
     std::fs::create_dir_all(&workdir).map_err(|e| e.to_string())?;
+    if let Ok(mut lock) = ACTIVE_WORKDIR.lock() {
+        *lock = Some(workdir.clone());
+    }
     let _workdir_guard = WorkdirGuard(workdir.clone());
     let workdir_str = workdir.to_string_lossy().to_string();
     let ffmpeg_str = ffmpeg.to_string_lossy().to_string();
@@ -452,6 +597,8 @@ pub fn execute_export(
         "segments": segments_json,
         "total_ms": st.total_ms,
         "warnings": warnings,
+        "adaptive_tier": plan.adaptive_tier,
+        "adaptive_reason": plan.adaptive_reason,
         "workdir": workdir_str,
     }))
 }
@@ -535,6 +682,8 @@ mod tests {
             subtitles: HashMap::new(),
             subtitle_format: "srt".to_string(),
             warnings: Vec::new(),
+            adaptive_tier: None,
+            adaptive_reason: None,
         }
     }
 

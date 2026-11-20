@@ -17,7 +17,10 @@ use std::thread;
 use clip_core::cues as cue_ops;
 use clip_core::model::{EncodeCfg, ExportMode, OutputCfg, Project, SubTrack};
 use clip_core::paths;
-use clip_core::presets::{profile_catalog, resolve_profile};
+use clip_core::presets::{
+    current_tier_settings, default_tier_presets_path, profile_catalog, resolve_profile,
+    update_global_tier_settings, TierSettings,
+};
 use clip_core::remap::preview_state;
 use clip_core::srt::read_srt_file;
 use serde_json::{json, Value};
@@ -111,6 +114,34 @@ fn respond_bytes(req: Request, data: Vec<u8>, ctype: &str) {
 
 /// Absolute path without the Windows `\\?\` verbatim prefix that
 /// `std::fs::canonicalize` adds (Python's `os.path.abspath` never does).
+fn custom_presets_path() -> PathBuf {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".clip-video")
+        .join("custom_presets.json")
+}
+
+fn load_custom_presets() -> Value {
+    let p = custom_presets_path();
+    if let Ok(content) = std::fs::read_to_string(&p) {
+        if let Ok(val) = serde_json::from_str::<Value>(&content) {
+            return val;
+        }
+    }
+    json!({})
+}
+
+fn save_custom_presets(val: &Value) -> Result<(), String> {
+    let p = custom_presets_path();
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let s = serde_json::to_string_pretty(val).map_err(|e| e.to_string())?;
+    std::fs::write(&p, s).map_err(|e| e.to_string())
+}
+
 fn clean_abs(p: &str) -> String {
     let c = std::fs::canonicalize(p)
         .map(|x| x.to_string_lossy().to_string())
@@ -846,10 +877,14 @@ fn explorer_args(is_file: bool, target: &str) -> Result<String, String> {
     if target.contains('"') {
         return Err(format!("路径中含有非法字符: {target}"));
     }
+    let mut clean = target.replace('/', "\\");
+    while clean.ends_with('\\') && clean.len() > 3 {
+        clean.pop();
+    }
     if is_file {
-        Ok(format!("/select,\"{target}\""))
+        Ok(format!("/select,\"{clean}\""))
     } else {
-        Ok(format!("\"{target}\""))
+        Ok(format!("\"{clean}\""))
     }
 }
 
@@ -1317,6 +1352,23 @@ fn route_get(req: Request, route: &str, q: &HashMap<String, String>, state: &Arc
             200,
         ),
         "/api/profiles" => respond_json(req, &json!({ "profiles": profile_catalog() }), 200),
+        "/api/tier-presets" => respond_json(
+            req,
+            &json!({
+                "settings": current_tier_settings(),
+                "default": TierSettings::default(),
+                "path": default_tier_presets_path().to_string_lossy(),
+            }),
+            200,
+        ),
+        "/api/custom-presets" => respond_json(
+            req,
+            &json!({
+                "presets": load_custom_presets(),
+                "path": custom_presets_path().to_string_lossy(),
+            }),
+            200,
+        ),
         "/api/export/default" => {
             let project = state.project.lock().unwrap().clone();
             if project.sources.is_empty() {
@@ -1509,6 +1561,34 @@ fn route_post(mut req: Request, route: &str, state: &Arc<State>, cfg: &Arc<Serve
                 None => respond_err(req, "无效的工程数据", 500),
             }
         }
+        "/api/tier-presets" => {
+            match serde_json::from_value::<TierSettings>(body.clone()) {
+                Ok(new_settings) => {
+                    match update_global_tier_settings(new_settings) {
+                        Ok(()) => respond_json(req, &json!({ "ok": true, "settings": current_tier_settings() }), 200),
+                        Err(e) => respond_err(req, &format!("保存预设配置失败: {e}"), 500),
+                    }
+                }
+                Err(e) => respond_err(req, &format!("无效的预设数据: {e}"), 400),
+            }
+        }
+        "/api/tier-presets/reset" => {
+            match update_global_tier_settings(TierSettings::default()) {
+                Ok(()) => respond_json(req, &json!({ "ok": true, "settings": current_tier_settings() }), 200),
+                Err(e) => respond_err(req, &format!("重置预设配置失败: {e}"), 500),
+            }
+        }
+        "/api/custom-presets" => {
+            let presets = body.get("presets").unwrap_or(&body);
+            match save_custom_presets(presets) {
+                Ok(()) => respond_json(req, &json!({ "ok": true, "presets": load_custom_presets() }), 200),
+                Err(e) => respond_err(req, &format!("保存自定义预设失败: {e}"), 500),
+            }
+        }
+        "/api/export/abort" => {
+            crate::ffmpeg::abort_active_export();
+            respond_json(req, &json!({ "ok": true }), 200);
+        }
         "/api/check-params" => match check_params(&body, state, cfg) {
             Ok(v) => respond_json(req, &v, 200),
             Err(e) => respond_err(req, &e, 500),
@@ -1663,6 +1743,26 @@ mod tests {
         assert_eq!(
             explorer_args(false, r"C:\Users\ybf2\reveal-test\with space").unwrap(),
             r#""C:\Users\ybf2\reveal-test\with space""#
+        );
+    }
+
+    #[test]
+    fn reveal_file_with_forward_slashes_is_normalized() {
+        assert_eq!(
+            explorer_args(true, "C:/test/nospace/video.mp4").unwrap(),
+            r#"/select,"C:\test\nospace\video.mp4""#
+        );
+    }
+
+    #[test]
+    fn reveal_directory_with_trailing_slash_is_stripped() {
+        assert_eq!(
+            explorer_args(false, r"C:\test\folder\").unwrap(),
+            r#""C:\test\folder""#
+        );
+        assert_eq!(
+            explorer_args(false, "C:/test/folder/").unwrap(),
+            r#""C:\test\folder""#
         );
     }
 

@@ -74,6 +74,8 @@ export function rememberProject(project: Project): void {
   saveRecent([item, ...readRecent().filter((r) => r.key !== item.key)])
 }
 
+import { apiClient } from '@/api'
+
 export function loadPresets(): Record<string, { encode: unknown; preset: string; embed_subtitles: boolean; updated: number }> {
   try {
     if (typeof localStorage === 'undefined') return {}
@@ -84,11 +86,34 @@ export function loadPresets(): Record<string, { encode: unknown; preset: string;
 }
 
 export function savePresets(data: Record<string, unknown>): void {
-  if (typeof localStorage === 'undefined') return
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(PRESET_STORE, JSON.stringify(data))
+    } catch {
+      /* quota: best-effort */
+    }
+  }
+  // Also persist to disk via backend API
+  apiClient.saveCustomPresets(data).catch(() => {})
+}
+
+export async function fetchServerCustomPresets(): Promise<Record<string, { encode: unknown; preset: string; embed_subtitles: boolean; updated: number }>> {
   try {
-    localStorage.setItem(PRESET_STORE, JSON.stringify(data))
+    const res = await apiClient.getCustomPresets()
+    const serverPresets = (res.presets || {}) as Record<string, { encode: unknown; preset: string; embed_subtitles: boolean; updated: number }>
+    if (typeof localStorage !== 'undefined') {
+      const local = loadPresets()
+      const merged = { ...local, ...serverPresets }
+      try {
+        localStorage.setItem(PRESET_STORE, JSON.stringify(merged))
+      } catch {
+        /* best-effort */
+      }
+      return merged
+    }
+    return serverPresets
   } catch {
-    /* quota: best-effort */
+    return loadPresets()
   }
 }
 

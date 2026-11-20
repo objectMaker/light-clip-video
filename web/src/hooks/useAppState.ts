@@ -1282,6 +1282,15 @@ export function useAppState() {
   }, [revealPath])
 
   // --- profiles & presets ---------------------------------------------------
+  const refreshProfiles = useCallback(async () => {
+    try {
+      const profs = await apiClient.getProfiles()
+      setProfiles(profs.profiles || [])
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   const setProfileModeFull = useCallback(
     (m: ProfileMode) => {
       setProfileModeState(m)
@@ -1303,10 +1312,21 @@ export function useAppState() {
         }
         setStatus('720p 预设需要重新编码，已自动切到精确模式')
       }
+      if (['builtin_720p_t1', 'builtin_720p_t2', 'builtin_720p_t3'].includes(m)) {
+        const prof = profiles.find((x) => x.id === m)
+        if (prof?.encode) {
+          const { values, customValues } = encodeToValues(prof.encode, srcInfo, false)
+          setEncValues(values)
+          setEncCustomValues(customValues)
+          encValuesRef.current = values
+          encCustomValuesRef.current = customValues
+        }
+        if (prof?.speed) setPresetSpeed(prof.speed)
+      }
       void persistProject()
       scheduleEncodeCheck()
     },
-    [persistProject, scheduleEncodeCheck],
+    [persistProject, profiles, scheduleEncodeCheck, srcInfo],
   )
 
   const applyBuiltinAsCustom = useCallback(() => {
@@ -1588,7 +1608,7 @@ export function useAppState() {
   const segments: Segment[] = state?.segments || []
 
   return {
-    videoRef, project, state, config, profiles, srcInfo, status, setStatus, notify,
+    videoRef, project, state, config, profiles, setProfiles, refreshProfiles, srcInfo, status, setStatus, notify,
     tab, setTab, cueSub, setCueSub,
     activeSource, setActiveSource, activeGroup, setActiveGroup, cueTrack, setCueTrack,
     activeCue, setActiveCue, cueStart, setCueStart, cueEnd, setCueEnd,

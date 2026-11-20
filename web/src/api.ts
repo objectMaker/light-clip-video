@@ -13,6 +13,7 @@ import type {
   ProjectAndState,
   ServerConfig,
   SrcInfo,
+  TierSettings,
 } from './types'
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -40,6 +41,12 @@ export const apiClient = {
   getRecover: () => api<{ project: Project | null; state?: unknown; saved_at?: string; file?: string }>('/api/project/recover'),
   getConfig: () => api<ServerConfig>('/api/config'),
   getProfiles: () => api<{ profiles: Profile[] }>('/api/profiles'),
+  getTierPresets: () =>
+    api<{ settings: TierSettings; default: TierSettings; path: string }>('/api/tier-presets'),
+  saveTierPresets: (settings: TierSettings) =>
+    post<{ ok: boolean; settings: TierSettings }>('/api/tier-presets', settings),
+  resetTierPresets: () =>
+    post<{ ok: boolean; settings: TierSettings }>('/api/tier-presets/reset', {}),
   syncProject: (project: Project) => post<{ state: ProjectAndState['state'] }>('/api/project', { project }),
   loadProject: (project: Project) => post<ProjectAndState>('/api/project/load', { project }),
   preview: (project: Project) => post<{ state: ProjectAndState['state'] }>('/api/preview', { project }),
@@ -68,6 +75,9 @@ export const apiClient = {
   exportStatus: (id: string) => api<ExportStatus>(`/api/export/status?${q({ id })}`),
   reveal: (path: string) => post<{ ok: boolean; opened: string }>('/api/reveal', { path, dry_run: false }),
   mkdir: (parent: string, name: string) => post<{ path: string }>('/api/mkdir', { parent, name }),
+  getCustomPresets: () => api<{ presets: Record<string, any> }>('/api/custom-presets'),
+  saveCustomPresets: (presets: Record<string, any>) => post<{ ok: boolean; presets: Record<string, any> }>('/api/custom-presets', { presets }),
+  abortExport: () => post<{ ok: boolean }>('/api/export/abort', {}),
 }
 
 export function mediaUrl(path: string): string {

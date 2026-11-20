@@ -79,6 +79,8 @@ pub struct RatePlan {
     /// Effective ceiling used by the size estimator.
     pub ceiling_kbps: Option<i64>,
     pub notes: Vec<RateNote>,
+    pub adaptive_tier: Option<String>,
+    pub adaptive_reason: Option<String>,
 }
 
 /// Decide the rate-control flags for one source.
@@ -108,16 +110,20 @@ pub fn plan_rate(
             info.video.fps_float,
             class == CodecClass::Efficient,
         );
+        let tiers = crate::presets::current_tier_settings();
         let c = match preset_id {
-            crate::presets::PROFILE_720P_T1 => crate::presets::builtin_720p_t1(),
-            crate::presets::PROFILE_720P_T3 => crate::presets::builtin_720p_t3(),
-            _ => crate::presets::builtin_720p_t2(),
+            crate::presets::PROFILE_720P_T1 => tiers.builtin_720p_t1.to_encode_cfg(),
+            crate::presets::PROFILE_720P_T3 => tiers.builtin_720p_t3.to_encode_cfg(),
+            _ => tiers.builtin_720p_t2.to_encode_cfg(),
         };
         (c, Some((preset_id, reason)))
     } else {
         (cfg.clone(), None)
     };
     let cfg = &effective_cfg;
+
+    let adaptive_tier = adaptive_note.as_ref().map(|(p, _)| p.to_string());
+    let adaptive_reason = adaptive_note.as_ref().map(|(_, r)| r.to_string());
 
     let rc = resolve_rate_control(cfg, match_source_bitrate);
     let locked = profile_mode != crate::presets::PROFILE_CUSTOM;
@@ -298,6 +304,8 @@ pub fn plan_rate(
         audio_bps,
         ceiling_kbps: ceiling,
         notes,
+        adaptive_tier,
+        adaptive_reason,
     }
 }
 
@@ -340,11 +348,12 @@ mod tests {
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&info("av1", 677, 128), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
         assert_eq!(p.video_bps, None); // CRF mode
-        assert_eq!(p.crf, 27); // 自动匹配 T2
+        assert_eq!(p.crf, 28); // 自动匹配 T2 (CRF 28)
         assert_eq!(p.maxrate_kbps, Some(950)); // keeps T2 950k ceiling without being clamped to 846k
         assert_eq!(p.bufsize_kbps, Some(1800)); // keeps T2 1800k buffer
         assert_eq!(p.audio_bps, Some(96000)); // min(96, 128)
         assert!(!p.notes.iter().any(|(_, t, _)| t.contains("峰值上限已按源片合理调整")));
+        assert_eq!(p.adaptive_tier, Some(crate::presets::PROFILE_720P_T2.to_string()));
     }
 
     #[test]
@@ -353,9 +362,10 @@ mod tests {
         i.video.height = 720;
         let cfg = crate::presets::builtin_720p();
         let p = plan_rate(&i, &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
-        assert_eq!(p.crf, 27); // T1 防马赛克 CRF 27
+        assert_eq!(p.crf, 28); // T1 防马赛克 CRF 28
         assert_eq!(p.maxrate_kbps, Some(1100)); // T1 1100k 峰值
         assert_eq!(p.bufsize_kbps, Some(2200)); // T1 2200k 缓冲
+        assert_eq!(p.adaptive_tier, Some(crate::presets::PROFILE_720P_T1.to_string()));
     }
 
     #[test]
@@ -364,25 +374,26 @@ mod tests {
         let p = plan_rate(&info("h264", 8000, 192), &cfg, true, "builtin_720p", &ExportMode::Precise, 18);
         assert_eq!(p.maxrate_kbps, Some(1100)); // 8000k 自动升级 T1 高动态防马赛克
         assert_eq!(p.ceiling_kbps, Some(1100));
+        assert_eq!(p.adaptive_tier, Some(crate::presets::PROFILE_720P_T1.to_string()));
     }
 
     #[test]
     fn presets_t1_and_t3_rates() {
         let t1_cfg = crate::presets::builtin_720p_t1();
         let p1 = plan_rate(&info("h264", 8000, 192), &t1_cfg, true, "builtin_720p_t1", &ExportMode::Precise, 18);
-        assert_eq!(p1.crf, 27);
+        assert_eq!(p1.crf, 28);
         assert_eq!(p1.maxrate_kbps, Some(1100));
         assert_eq!(p1.bufsize_kbps, Some(2200));
 
         let t2_cfg = crate::presets::builtin_720p_t2();
         let p2 = plan_rate(&info("h264", 8000, 192), &t2_cfg, true, "builtin_720p_t2", &ExportMode::Precise, 18);
-        assert_eq!(p2.crf, 27);
+        assert_eq!(p2.crf, 28);
         assert_eq!(p2.maxrate_kbps, Some(950));
         assert_eq!(p2.bufsize_kbps, Some(1800));
 
         let t3_cfg = crate::presets::builtin_720p_t3();
         let p3 = plan_rate(&info("h264", 8000, 192), &t3_cfg, true, "builtin_720p_t3", &ExportMode::Precise, 18);
-        assert_eq!(p3.crf, 28);
+        assert_eq!(p3.crf, 29);
         assert_eq!(p3.maxrate_kbps, Some(900));
         assert_eq!(p3.bufsize_kbps, Some(1700));
     }

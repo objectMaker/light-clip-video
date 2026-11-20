@@ -274,3 +274,19 @@ export interface ServerConfig {
   outdir: string
   cwd: string
 }
+
+export interface TierConfig {
+  name: string
+  tagline: string
+  crf: number
+  maxrate_kbps: number
+  bufsize_kbps: number
+  audio_kbps: number
+  speed: string
+}
+
+export interface TierSettings {
+  builtin_720p_t1: TierConfig
+  builtin_720p_t2: TierConfig
+  builtin_720p_t3: TierConfig
+}
